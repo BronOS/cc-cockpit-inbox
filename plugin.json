@@ -1,0 +1,35 @@
+{
+  "id": "bronos.inbox",
+  "name": "Inbox",
+  "version": "0.1.0",
+  "api": 1,
+  "main": "dist/host.js",
+  "description": "One list of what needs you across Chat, Mail and Jira (any plugin that offers an inbox feed), ranked by your own rules, with done, snooze and undo, and today's calendar as a timeline. It reads the other plugins through their services and has no account of its own. Needs cc-cockpit 0.9.7.",
+  "author": "Oleg Bronzov",
+  "license": "MIT",
+  "contributes": {
+    "panels": [
+      {
+        "id": "main",
+        "title": "Inbox",
+        "icon": "icons/inbox.svg",
+        "entry": "panels/main.html",
+        "defaultZone": "right"
+      }
+    ],
+    "cli": [
+      {
+        "name": "inbox",
+        "summary": "Inbox: the ranked list, open, mark done or snooze an item",
+        "usage": "inbox [list] | open <n|key> | done <n|key> | snooze <n|key> 1h|afternoon|tomorrow|changes | help"
+      }
+    ]
+  },
+  "services": {
+    "uses": {
+      "inbox-feed": 1,
+      "calendar": 1
+    },
+    "collects": ["inbox-feed"]
+  }
+}
