@@ -310,9 +310,32 @@ function createInbox(ctx, opts = {}) {
     }
   }
 
+  /** The app's title bar of the panel: when the list was read, refresh and settings. Sent when it changes. */
+  let lastHeader = ''
+  function header() {
+    if (typeof ctx.panels.header !== 'function') return
+    const d = updatedAt ? new Date(updatedAt) : null
+    const spec = {
+      meta: d ? `updated ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : 'loading…',
+      actions: [
+        { id: 'refresh', icon: 'refresh', title: 'Refresh every source' },
+        { id: 'settings', icon: 'settings', title: 'Inbox settings' },
+      ],
+    }
+    const json = JSON.stringify(spec)
+    if (json === lastHeader) return
+    lastHeader = json
+    try {
+      ctx.panels.header(PANEL, spec)
+    } catch (e) {
+      ctx.log.warn(`panel header: ${why(e)}`)
+    }
+  }
+
   function publish() {
     if (disposed) return
     const t = now()
+    header()
     const snap = snapshot(t)
     try {
       ctx.panels.post(PANEL, snap)
@@ -491,6 +514,14 @@ function createInbox(ctx, opts = {}) {
   }
 
   disposers.push(ctx.panels.onMessage(PANEL, onPanelMessage))
+  if (typeof ctx.panels.onAction === 'function') {
+    disposers.push(
+      ctx.panels.onAction(PANEL, (id) => {
+        if (id === 'refresh') void tick().catch((e) => ctx.log.warn(`refresh: ${why(e)}`))
+        else if (id === 'settings') ctx.panels.post(PANEL, { type: 'view', view: 'settings' })
+      })
+    )
+  }
   disposers.push(feeds.on('changed', onFeedChanged))
   disposers.push(feeds.onChange(() => void sync().then(publish, (e) => ctx.log.warn(`sync: ${why(e)}`))))
   disposers.push(ctx.schedule(REFRESH_S, () => tick()))

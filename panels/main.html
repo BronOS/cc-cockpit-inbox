@@ -1,11 +1,109 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Inbox</title>
-</head>
-<body>
-<div id="app"></div>
-<script src="main.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Inbox</title>
+    <!-- The panel CSP allows script from this plugin's own files only (no inline script), so the
+      logic lives in main.js; rowlogic.js and timeline.js hold its pure parts. The SDK gives the page
+      `ccPanel` and the app theme variables. The title bar (updated time, refresh, settings) is the
+      app's, from the host's ctx.panels.header. Source colours are names from a fixed palette, as
+      classes (c-green ...), never CSS from a provider. -->
+    <script src="/__sdk/panel.js"></script>
+    <script src="rowlogic.js" defer></script>
+    <script src="timeline.js" defer></script>
+    <script src="main.js" defer></script>
+    <style>
+      body { margin: 0; font: 12.5px/1.4 system-ui, sans-serif; background: var(--cc-bg); color: var(--cc-fg); }
+      button { font: inherit; color: inherit; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
+      button:hover { border-color: var(--cc-border-strong); }
+      button:focus-visible, .row:focus-visible { outline: 2px solid var(--cc-focus); outline-offset: -2px; }
+      button.primary { background: var(--cc-accent); color: var(--cc-accent-fg); border-color: var(--cc-accent); font-weight: 600; }
+      button.primary:hover { background: var(--cc-accent-hover); }
+      .muted { color: var(--cc-fg-muted); }
+
+      /* The palette (feed.js COLORS): a source's dot and badge. */
+      .c-green { --src: #3ecf8e; } .c-red { --src: #f2777a; } .c-blue { --src: #5c9cf5; }
+      .c-amber { --src: #e5b567; } .c-violet { --src: #b48ef0; } .c-grey { --src: #8b93a3; }
+
+      .notice { margin: 8px 10px; padding: 6px 8px; border-radius: 5px; background: var(--cc-bg-banner); border: 1px solid var(--cc-border); white-space: pre-wrap; overflow-wrap: anywhere; }
+      .notice.error { background: var(--cc-bg-error); }
+
+      .chips { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--cc-border); flex-wrap: wrap; }
+      .chip { border-radius: 999px; padding: 1px 9px; color: var(--cc-fg-muted); background: none; }
+      .chip.on { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); border-color: transparent; color: var(--cc-fg); }
+      .chip i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--src); }
+      .chip .n { color: var(--cc-fg-subtle); margin-left: 4px; }
+      .chip.problem .n::after { content: " !"; color: var(--cc-status-needs-permission, #e5a00d); }
+      .chip.done { margin-left: auto; }
+      .src-err { margin: 6px 10px; padding: 5px 8px; border-radius: 5px; background: color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 12%, transparent); color: var(--cc-fg); font-size: 12px; overflow-wrap: anywhere; }
+
+      .cal { padding: 8px 10px; border-bottom: 1px solid var(--cc-border); }
+      .cal.bottom { border-bottom: 0; border-top: 1px solid var(--cc-border); }
+      .cal-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+      .cal-h .t { font-weight: 600; font-size: 11px; color: var(--cc-fg-muted); text-transform: uppercase; letter-spacing: .05em; }
+      .cal-h .more { margin-left: auto; color: var(--cc-fg-subtle); font-size: 11px; }
+      .stripbox { position: relative; }
+      .strip { display: flex; height: 12px; border-radius: 3px; overflow: hidden; }
+      .strip i { flex: 1; background: var(--cc-surface-3); border-right: 1px solid var(--cc-surface-1); }
+      .strip i:last-child { border-right: 0; }
+      .strip i.b { background: color-mix(in srgb, var(--cc-status-working, #3b8eea) 70%, var(--cc-surface-1)); }
+      .strip i.u { background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 75%, var(--cc-surface-1)) 0 3px, color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 25%, var(--cc-surface-1)) 3px 6px); }
+      .stripbox .now { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--cc-status-ended, #cd3131); border-radius: 1px; }
+      .scale { position: relative; height: 12px; font-size: 9.5px; line-height: 12px; color: var(--cc-fg-subtle); font-variant-numeric: tabular-nums; }
+      .scale span { position: absolute; transform: translateX(-50%); }
+      .scale span:first-child { transform: none; }
+      .scale span:last-child { transform: translateX(-100%); }
+      .next { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 5px 8px; background: var(--cc-surface-1); border-radius: 5px; }
+      .next .when { color: #e5b567; font-weight: 600; white-space: nowrap; }
+      .next .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+      .up { list-style: none; margin: 5px 0 0; padding: 0; }
+      .up li { display: flex; gap: 8px; align-items: center; padding: 2px; font-size: 12px; }
+      .up .tm { color: var(--cc-fg-muted); width: 72px; flex: none; font-variant-numeric: tabular-nums; }
+      .up .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+      .up .q { color: var(--cc-status-needs-permission, #e5a00d); font-size: 11px; white-space: nowrap; }
+
+      .list { list-style: none; margin: 0; padding: 4px 0; }
+      .row { display: flex; gap: 9px; padding: 6px 10px; cursor: pointer; border-left: 2px solid transparent; position: relative; }
+      .row:hover { background: var(--cc-surface-1); }
+      .row.sel { background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-left-color: var(--cc-accent); }
+      .badge { flex: none; width: 40px; text-align: center; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; border-radius: 4px; padding: 2px 0; height: 17px; box-sizing: border-box; margin-top: 1px; color: var(--src); background: color-mix(in srgb, var(--src) 14%, transparent); }
+      .body { flex: 1; min-width: 0; }
+      .l1 { display: flex; gap: 6px; align-items: baseline; }
+      .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row.unread .title { font-weight: 600; }
+      .age { color: var(--cc-fg-subtle); font-size: 11px; white-space: nowrap; }
+      .l2 { color: var(--cc-fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row.back .l2 { color: var(--cc-fg); }
+      .tri { font-size: 10.5px; font-weight: 600; margin-right: 6px; }
+      .tri.urgent { color: var(--cc-status-ended, #ff6b6b); } .tri.action { color: #f0a35e; } .tri.fyi { color: var(--cc-fg-subtle); }
+      .why { color: var(--cc-fg-subtle); font-size: 11px; margin-top: 2px; display: none; }
+      .row.sel .why { display: block; }
+      .acts { position: absolute; right: 8px; top: 5px; display: none; gap: 4px; background: var(--cc-surface-1); padding-left: 6px; }
+      .row:hover .acts, .row.sel .acts, .row:focus-within .acts { display: flex; }
+      .row.sel .acts { background: transparent; }
+      .sep { margin: 6px 10px; border-top: 1px solid var(--cc-border); position: relative; height: 0; }
+      .sep span { position: absolute; top: -8px; left: 0; background: var(--cc-bg); padding-right: 6px; color: var(--cc-fg-subtle); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
+      .fold { padding: 6px 10px 10px; color: var(--cc-fg-subtle); font-size: 12px; display: flex; justify-content: space-between; }
+      .fold button { background: none; border: 0; color: var(--cc-accent); padding: 0; }
+      .menu { position: absolute; right: 8px; top: 30px; z-index: 5; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; padding: 4px; box-shadow: 0 8px 24px var(--cc-shadow, rgba(0,0,0,.4)); min-width: 200px; }
+      .menu button { display: flex; justify-content: space-between; width: 100%; background: none; border: 0; padding: 5px 8px; border-radius: 5px; text-align: left; }
+      .menu button:hover { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
+      .menu .h { padding: 3px 8px; color: var(--cc-fg-subtle); font-size: 11px; }
+      kbd { font: 10.5px ui-monospace, monospace; color: var(--cc-fg-subtle); }
+      .toast { position: sticky; bottom: 8px; margin: 0 10px 8px; display: flex; gap: 10px; align-items: center; padding: 7px 10px; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; }
+      .toast .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .toast button { background: none; border: 0; color: var(--cc-accent); font-weight: 600; }
+      .keys { padding: 6px 10px 10px; color: var(--cc-fg-subtle); font-size: 11px; border-top: 1px solid var(--cc-border); }
+      .keys kbd { border: 1px solid var(--cc-border); border-radius: 3px; padding: 0 4px; margin: 0 2px; }
+      .empty { padding: 26px 10px; text-align: center; color: var(--cc-fg-subtle); }
+
+      .wide-body { display: flex; }
+      .wide-body > .col { flex: 1; min-width: 0; }
+      .wide-body > .side { width: 300px; border-left: 1px solid var(--cc-border); }
+      .wide-body > .side .cal { border-bottom: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div class="empty">Loading…</div></div>
+  </body>
 </html>
