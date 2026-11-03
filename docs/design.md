@@ -33,35 +33,68 @@ had done and snooze). Port its decisions, not its user-specific text.
    source, Jira only hidden); **Snooze** (1 hour, this afternoon, tomorrow morning, until it
    changes). Undo after both; a "Done & snoozed" view to put one back. Opening is not done.
 9. **Name**: Inbox.
+10. **Sources register through the app** (2026-11-03): every source plugin provides one service,
+    `inbox-feed`, and Inbox reads all of its providers through a new core call
+    (`ctx.services.useAll`, app 0.9.7). A new source (Forgejo, later) shows up in Inbox by providing
+    `inbox-feed`, with no Inbox release. Done before the source plugins, so nothing migrates later.
+11. **Badge** is a setting: urgent items (default), urgent + action, all items, off.
+12. **Done and snooze stay on the machine** (app storage is local; nothing syncs).
 
 ## Architecture
 
 ```
- bronos.chat ──provides inbox-chat ───┐
- bronos.gmail ─provides inbox-mail ───┼──► bronos.inbox (one panel)
- bronos.jira ──provides inbox-issues ─┤        ranks, done/snooze, calendar strip
- bronos.calendar provides calendar ───┘
+ bronos.chat ───────┐ provide inbox-feed
+ bronos.gmail ──────┤ (one service, many providers)      ┌─► bronos.inbox (one panel)
+ bronos.jira ───────┤ ──── ctx.services.useAll ──────────┤    ranks, done/snooze
+ (forgejo, later) ──┘                                     │
+ bronos.calendar ── provides calendar ── services.use ────┘    calendar strip
 ```
 
-- A service has one provider per project (the Plugins page picks one when several plugins provide
-  it), so each source is its own service name: **`inbox-chat`, `inbox-mail`, `inbox-issues`** (one
-  contract, `feed` below, the same for all three) and **`calendar`** (its own contract). The source
-  plugins provide them; Inbox `uses` all four, each optional at run time
-  (`ctx.services.available`). Decision 1 is then the app's own provider pick (Settings > Plugins >
-  "Plugin used for inbox-issues": Jira today, Forgejo one day) plus Inbox's per-source settings.
-- Manifest: `services: { uses: { "inbox-chat": 1, "inbox-mail": 1, "inbox-issues": 1, "calendar": 1 } }`;
-  one panel (default zone right); CLI `ccc inbox` (list, done, snooze, for Claude and scripts). No
-  OAuth, no secrets, no network: Inbox has no account of its own.
+- **`inbox-feed`** (the feed contract below) is provided by every source plugin; Inbox reads all of
+  them with `ctx.services.useAll('inbox-feed')` (core, below). The app is the registry: it already
+  knows which enabled plugin provides what. Each provider describes itself (`describe()`: label,
+  badge, colour), and Inbox lists every provider as a source with its own on/off, item count and
+  weight, keyed by plugin id. A provider disabled or uninstalled leaves the list; one enabled later
+  joins it, on and with the defaults of its `kind` (decision 1 is Inbox's per-source settings).
+- **`calendar`** stays a single-provider service (`ctx.services.use`): Inbox draws one strip.
+- Manifest: `services: { uses: { "inbox-feed": 1, "calendar": 1 } }`; one panel (default zone
+  right); CLI `ccc inbox` (list, done, snooze, for Claude and scripts). No OAuth, no secrets, no
+  network: Inbox has no account of its own.
 - **Cheap reads**: a feed answers from the provider's own cache (what its panel shows), never with an
   API call, so Inbox polling it costs nothing. The provider emits `changed` after each of its polls;
-  Inbox re-reads on that event (debounced 1 s) and every 60 s as a fallback.
-- Every value from a feed is untrusted input: validated, strings capped (title 300, from/where 120),
-  at most 50 items a call, unknown fields dropped, rendered as text.
+  Inbox re-reads that source on the event (debounced 1 s) and every 60 s as a fallback.
+- Every value from a feed is untrusted input: validated, strings capped (title 300, from/where 120,
+  label 24, badge 6), at most 50 items a call, unknown fields dropped, rendered as text; a colour is
+  one of a fixed palette name, never CSS.
 
-## The feed contract (`inbox-chat`, `inbox-mail`, `inbox-issues`, v1)
+## Core: `ctx.services.useAll` (app 0.9.7)
+
+- `ctx.services.useAll(name)` → `ServiceSet`, for a name in the manifest's `services.uses`:
+  - `providers()` → `{ pluginId, title, handle }[]`: every enabled plugin of the project that
+    provides `name` with a matching major and has called `provide`, resolved on every call (like
+    `use`), in plugin-title order. `handle` is a normal `ServiceHandle` bound to that one provider
+    (calls go to it whatever the project's provider pick is).
+  - `on(event, listener)` → disposer: events from **every** provider, the listener getting
+    `(data, pluginId)`. (Today `emit` reaches consumers only from the selected provider; for a
+    `useAll` subscriber every provider's emit counts.)
+  - `onChange(listener)` → disposer: the provider set changed (a provider provided, withdrew,
+    reloaded, was enabled or disabled).
+- `ctx.services.use(name)` and the provider pick are unchanged: a single-provider consumer still
+  gets the picked one, and the Plugins page still offers the pick (another plugin may `use` the
+  name). Its "several providers, pick one" warning is left out for a service whose every consumer
+  in the project calls `useAll` (the manifest says so: `services.uses` value `{ "version": 1, "all": true }`,
+  or the plan finds a simpler signal).
+- Same rules as `use`: plain data both ways, the provider's errors as fresh Errors, cycle detection,
+  `caller()` in the provider. Guide text (`ccc guide api`, services), SDK types
+  (`ServicesApi.useAll`, `ServiceSet`), example repo sync, unit tests in `test/unit/` for the host
+  registry, an e2e with two providers.
+
+## The feed contract (`inbox-feed`, v1)
 
 Methods (all async, plain data):
 
+- `describe()` → `{ label: string, badge: string, color: 'green' | 'red' | 'blue' | 'amber' | 'violet' | 'grey', kind: 'chat' | 'mail' | 'issues' | 'other' }`:
+  how Inbox shows the source ("Chat", "CHAT", green). `kind` picks the default weight and boosts.
 - `features()` → `string[]`: which optional methods exist (`markRead`); lets a method be added later
   without a major bump (the reviewer's `features()` pattern).
 - `items({ limit })` → `{ items: FeedItem[], asOf: number, state: 'ok' | 'signedOut' | 'error', message?: string }`.
@@ -118,6 +151,8 @@ interface FeedItem {
 
 - The settings page says the rule: keep a weight below the gap between levels (150) and the level
   decides; a bigger weight makes that source win across levels (the person's choice).
+- Weights are per provider (by plugin id); the defaults come from `kind` (chat 30, mail 15,
+  issues 0, other 0). A new source starts on, with the defaults.
 - **Dedupe**: a mail or chat item whose `jiraKey` matches a listed issue is hidden (setting "Hide a
   Jira mail when its issue is listed", on); the issue row shows "+1 mail".
 - **Calendar in the list** (position "in the list"): the next event becomes a CAL item 30 min (a
@@ -126,7 +161,7 @@ interface FeedItem {
 
 ## Done and snooze
 
-- State per item key `<service>:<id>`: `{ kind: 'done' | 'snooze', rev, at, until? }` in
+- State per item key `<pluginId>:<id>`: `{ kind: 'done' | 'snooze', rev, at, until? }` in
   `ctx.appStorage` (app-wide: one inbox, done in one window is done in all; main applies the calls
   one at a time). Kept 14 days after the item was last seen, then dropped.
 - **Done** (✓, `e`): hidden while the item's `rev` is the one stored; a new `rev` brings it back with
@@ -143,22 +178,22 @@ interface FeedItem {
 As the mock-up: header (Inbox, updated time, refresh, settings), chips All / Chat / Mail / Jira with
 counts and Done & snoozed, the calendar block where its setting puts it, the list, the key hints.
 A source that is off or has no provider is left out of the chips; one with `signedOut` / `error`
-shows its line above the list. Badge: the number of urgent items (setting: urgent + action, off).
+shows its line above the list. Badge (setting "Badge shows"): urgent items (default), urgent +
+action, all items, off.
 
-## Work in the source plugins (one release each, before Inbox)
+## Work in the source plugins (one release each, after app 0.9.7, before Inbox)
 
-- **Chat 0.2.0**: provide `inbox-chat` from its rows (mentions and DMs): `rev` = latest message
+- **Chat 0.2.0**: provide `inbox-feed` from its rows (mentions and DMs): `rev` = latest message
   name, `markRead` = its mark-read write, `open` = its row open.
-- **Gmail 0.4.0**: provide `inbox-mail`: `rev` = history id or the newest message id, `markRead` =
+- **Gmail 0.4.0**: provide `inbox-feed`: `rev` = the newest message id, `markRead` =
   `setThreadUnread(false)`, `jiraKey` from its Jira finder.
-- **Jira 0.6.0**: provide `inbox-issues` beside `jira`: `rev` = `updated`, `dueAt`, `open` = its issue
+- **Jira 0.6.0**: provide `inbox-feed` beside `jira`: `rev` = `updated`, `dueAt`, `open` = its issue
   view with the companion.
 - **Calendar 0.2.0**: provide `calendar` from its event cache; `respond` = its RSVP.
-- Each with tests (contract shape, caps, `changed` after a poll) and a guide line in its README.
+- Each needs app 0.9.7 only for being read by Inbox; providing works on older apps too (a provider
+  needs nothing new). Tests: contract shape, caps, `changed` after a poll; a README line.
 
-## Open questions
+## Settled questions
 
-1. Badge: urgent only (proposed), or urgent + action?
-2. A second issue source (Forgejo) later: a slot `inbox-code`, or let `inbox-issues` take several
-   providers (a core change: services have one provider per project today)?
-3. Should snooze state also travel between machines? Proposed: no (app storage is local).
+- Badge: a setting (decision 11). Several issue sources: the `useAll` registry (decision 10).
+  Done and snooze across machines: no (decision 12).
