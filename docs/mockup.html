@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox · mockup</title>
+<style>
+:root {
+  --bg: #16181d; --panel: #1c1f26; --raise: #232731; --line: #2d323e; --fg: #e3e6ec; --dim: #9aa1ae; --faint: #6b7280;
+  --accent: #7aa2f7; --accent-soft: rgba(122,162,247,.14);
+  --chat: #3ecf8e; --mail: #f2777a; --jira: #5c9cf5; --cal: #e5b567;
+  --urgent: #ff6b6b; --act: #f0a35e; --fyi: #8b93a3;
+  --now: #ff5c7a;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+button { font: inherit; color: inherit; }
+
+/* mock-up controls, not part of the plugin */
+.mock { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 16px; border-bottom: 1px dashed var(--line); color: var(--dim); font-size: 12px; }
+.mock b { color: var(--fg); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: none; border: 0; padding: 3px 9px; cursor: pointer; color: var(--dim); }
+.seg button.on { background: var(--accent-soft); color: var(--fg); }
+.stage { padding: 18px 16px; display: flex; justify-content: center; }
+.frame { width: 440px; max-width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.frame.wide { width: 820px; }
+
+/* panel header */
+.ph { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.ph .t { font-weight: 600; }
+.ph .upd { margin-left: auto; color: var(--faint); font-size: 11px; }
+.icon { background: none; border: 0; color: var(--dim); cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.icon:hover { background: var(--raise); color: var(--fg); }
+.chips { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 1px 9px; cursor: pointer; color: var(--dim); font-size: 12px; }
+.chip.on { background: var(--accent-soft); border-color: transparent; color: var(--fg); }
+.chip i { font-style: normal; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.chip .n { color: var(--faint); margin-left: 3px; }
+
+/* calendar block */
+.cal { padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+.cal.bottom { border-bottom: 0; border-top: 1px solid var(--line); }
+.cal-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.cal-h .t { font-weight: 600; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.cal-h .more { margin-left: auto; color: var(--faint); font-size: 11px; }
+.strip { position: relative; height: 44px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.strip .hr { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line); }
+.strip .hr span { position: absolute; bottom: 1px; left: 3px; font-size: 9px; color: var(--faint); }
+.strip .ev { position: absolute; height: 17px; border-radius: 3px; padding: 0 4px; font-size: 10px; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(229,181,103,.22); border-left: 2px solid var(--cal); cursor: pointer; }
+.strip .ev.past { opacity: .4; }
+.strip .ev.unans { background: repeating-linear-gradient(135deg, rgba(229,181,103,.18) 0 4px, transparent 4px 8px); }
+.strip .ev.cur { background: rgba(229,181,103,.4); }
+.strip .now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--now); }
+.strip .now::before { content: ""; position: absolute; top: -3px; left: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--now); }
+.next { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 8px; background: var(--raise); border-radius: 6px; }
+.next .when { color: var(--cal); font-weight: 600; white-space: nowrap; }
+.next .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 5px; padding: 1px 8px; cursor: pointer; font-size: 12px; }
+.btn.pri { background: var(--accent); color: #0d1117; border-color: transparent; font-weight: 600; }
+.up { list-style: none; margin: 6px 0 0; padding: 0; }
+.up li { display: flex; gap: 8px; align-items: center; padding: 3px 2px; font-size: 12px; }
+.up .tm { color: var(--dim); width: 64px; flex: none; font-variant-numeric: tabular-nums; }
+.up .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up .q { color: var(--act); font-size: 11px; white-space: nowrap; }
+
+/* the merged list */
+.list { list-style: none; margin: 0; padding: 4px 0; }
+.row { display: flex; gap: 9px; padding: 7px 12px; cursor: pointer; border-left: 2px solid transparent; position: relative; }
+.row:hover { background: var(--raise); }
+.row.sel { background: var(--accent-soft); border-left-color: var(--accent); }
+.badge { flex: none; width: 38px; text-align: center; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; border-radius: 4px; padding: 2px 0; height: 17px; margin-top: 1px; }
+.b-chat { color: var(--chat); background: rgba(62,207,142,.13); }
+.b-mail { color: var(--mail); background: rgba(242,119,122,.13); }
+.b-jira { color: var(--jira); background: rgba(92,156,245,.14); }
+.b-cal { color: var(--cal); background: rgba(229,181,103,.15); }
+.body { flex: 1; min-width: 0; }
+.l1 { display: flex; gap: 6px; align-items: baseline; }
+.title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.unread .title { font-weight: 600; }
+.age { color: var(--faint); font-size: 11px; white-space: nowrap; }
+.l2 { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.l2 .tri { font-size: 10.5px; font-weight: 600; margin-right: 6px; }
+.tri.urgent { color: var(--urgent); } .tri.action { color: var(--act); } .tri.fyi { color: var(--fyi); }
+.why { color: var(--faint); font-size: 11px; margin-top: 2px; display: none; }
+.frame.why-on .why { display: block; }
+.acts { position: absolute; right: 10px; top: 6px; display: none; gap: 4px; background: var(--raise); padding-left: 6px; }
+.row:hover .acts { display: flex; }
+.fold { padding: 6px 12px 10px; color: var(--faint); font-size: 12px; display: flex; justify-content: space-between; }
+.fold button { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; }
+.sep { margin: 4px 12px; border-top: 1px solid var(--line); position: relative; height: 0; }
+.sep span { position: absolute; top: -8px; left: 0; background: var(--panel); padding-right: 6px; color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
+.src-err { margin: 6px 12px; padding: 6px 8px; border-radius: 6px; background: rgba(240,163,94,.1); color: var(--act); font-size: 12px; }
+
+/* wide: list + companion */
+.wide-body { display: flex; }
+.wide-body > .col { flex: 1; min-width: 0; }
+.wide-body > .cal-side { width: 300px; border-left: 1px solid var(--line); }
+.wide-body > .cal-side .cal { border-bottom: 0; }
+
+/* done / snooze */
+.menu { position: absolute; right: 10px; top: 30px; z-index: 5; background: var(--raise); border: 1px solid var(--line); border-radius: 7px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.4); min-width: 190px; }
+.menu button { display: flex; justify-content: space-between; width: 100%; background: none; border: 0; padding: 5px 8px; border-radius: 5px; cursor: pointer; text-align: left; }
+.menu button:hover { background: var(--accent-soft); }
+.menu kbd, .keys kbd { font: 10.5px ui-monospace, monospace; color: var(--faint); }
+.menu .h { padding: 3px 8px; color: var(--faint); font-size: 11px; }
+.toast { position: sticky; bottom: 8px; margin: 0 12px 8px; display: flex; gap: 10px; align-items: center; padding: 7px 10px; background: var(--raise); border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
+.toast button { margin-left: auto; background: none; border: 0; color: var(--accent); cursor: pointer; font-weight: 600; }
+.row.back .l2::after { content: " · back: new reply"; color: var(--accent); }
+.row.snz .age { color: var(--accent); }
+.keys { padding: 6px 12px 10px; color: var(--faint); font-size: 11px; border-top: 1px solid var(--line); }
+.keys kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin: 0 2px; }
+.chip.done { margin-left: auto; }
+.empty { padding: 26px 12px; text-align: center; color: var(--faint); }
+
+/* settings */
+.set { padding: 14px 16px; }
+.set h3 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+.set h3:first-child { margin-top: 0; }
+.set .hint { color: var(--faint); font-size: 12px; margin: -4px 0 8px; }
+table.src { width: 100%; border-collapse: collapse; }
+table.src th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11px; padding: 3px 4px; }
+table.src td { padding: 5px 4px; border-top: 1px solid var(--line); vertical-align: middle; }
+.grip { color: var(--faint); cursor: grab; }
+select, input[type=number] { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; font: inherit; font-size: 12px; }
+input[type=number] { width: 54px; }
+.rules { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; }
+.rules label { color: var(--fg); }
+.rules small { display: block; color: var(--faint); }
+.formula { margin-top: 10px; padding: 8px 10px; background: var(--bg); border-radius: 6px; font: 12px/1.5 ui-monospace, monospace; color: var(--dim); }
+.note { margin: 14px 16px 18px; color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="mock">
+  <span><b>Mock-up controls</b> (not in the plugin)</span>
+  <span>View <span class="seg" data-k="view"><button data-v="panel" class="on">Panel</button><button data-v="settings">Settings</button></span></span>
+  <span>Calendar <span class="seg" data-k="cal"><button data-v="top" class="on">Top</button><button data-v="bottom">Bottom</button><button data-v="inline">In the list</button><button data-v="side">Side (wide)</button><button data-v="off">Off</button></span></span>
+  <span>Width <span class="seg" data-k="width"><button data-v="side" class="on">Side zone</button><button data-v="wide">Main / wide</button></span></span>
+  <span>Show "why" <span class="seg" data-k="why"><button data-v="no" class="on">No</button><button data-v="yes">Yes</button></span></span>
+</div>
+<div class="stage"><div class="frame" id="frame"></div></div>
+
+<script>
+const S = { view: 'panel', cal: 'top', width: 'side', why: 'no', filter: 'all', sel: 'c1', more: false }
+const NOW = 13 * 60 + 42 // 13:42
+
+const EVENTS = [
+  { id: 'e1', from: 9 * 60 + 30, to: 9 * 60 + 45, title: 'Daily stand-up', past: true },
+  { id: 'e2', from: 11 * 60, to: 12 * 60, title: 'Architecture sync', past: true },
+  { id: 'e3', from: 14 * 60, to: 14 * 60 + 30, title: 'Design review: onboarding', meet: true },
+  { id: 'e4', from: 15 * 60, to: 15 * 60 + 30, title: '1:1 with Alex', meet: true },
+  { id: 'e5', from: 16 * 60 + 30, to: 17 * 60 + 30, title: 'Sprint planning', unans: true },
+]
+const UPCOMING = [
+  { tm: '15:00', nm: '1:1 with Alex' },
+  { tm: '16:30', nm: 'Sprint planning', q: '? not answered' },
+  { tm: 'Tue 10:00', nm: 'Quarterly roadmap' },
+]
+
+// what each source plugin's service returned (its own triage), re-ranked by Inbox's rules:
+// score = level (urgent 300, action 150, fyi 50) + source weight (chat 30, mail 15, jira 0) + boosts − age
+const ITEMS = [
+  { id: 'j0', src: 'jira', tri: 'urgent', unread: true, title: 'OPS-77 PROD down: checkout returns 502', from: 'Blocker · assigned to your team', where: 'Open', age: '6m', why: 'urgent 300 · jira +0 · unread +10 · 6 min −0 = 310' },
+  { id: 'c1', src: 'chat', tri: 'urgent', unread: true, title: 'Can you look at the failing deploy? prod is stuck', from: 'Sam R.', where: 'DM', age: '4m', why: 'urgent 300 · chat +30 · DM +20 · unread +10 = 360' },
+  { id: 'm1', src: 'mail', tri: 'urgent', unread: true, title: 'Contract renewal: signature needed today', from: 'Legal Ops', where: 'Inbox', age: '1h', why: 'urgent 300 · mail +15 · unread +10 · 1 h −5 = 320' },
+  { id: 'c2', src: 'chat', tri: 'action', unread: true, title: '@you please approve the release notes before 3', from: 'Priya K.', where: 'release-team', age: '22m', why: 'action 150 · chat +30 · mention +20 · unread +10 · 22 min −2 = 208' },
+  { id: 'cal', src: 'cal', tri: 'action', title: 'Design review: onboarding starts in 18 min', from: 'Calendar', where: 'Meet', age: '14:00', inline: true, why: 'starts within 30 min → pinned under the urgent items' },
+  { id: 'j1', src: 'jira', tri: 'action', unread: true, title: 'APP-412 Login loop after token refresh', from: 'assigned to you · High', where: 'In Progress', age: '2h', why: 'action 150 · jira +0 · due tomorrow +25 · unread +10 · 2 h −10 = 175' },
+  { id: 'c3', src: 'chat', tri: 'action', unread: false, back: true, title: 'thread: who owns the flaky e2e on CI?', from: 'Jordan T.', where: 'eng-general', age: '1h', why: 'action 150 · chat +30 · 1 h −5 = 175 (done at 12:10, back: new reply)' },
+  { id: 'm2', src: 'mail', tri: 'action', unread: true, title: 'Re: Q4 budget, numbers for your team', from: 'Finance', where: 'Inbox', age: '3h', why: 'action 150 · mail +15 · unread +10 · 3 h −15 = 160' },
+  { id: 'j2', src: 'jira', tri: 'action', unread: false, title: 'APP-398 Review: rate limiter for webhooks', from: 'review requested', where: 'Code Review', age: '5h', why: 'action 150 · jira +0 · 5 h −25 = 125' },
+  { id: 'c4', src: 'chat', tri: 'fyi', unread: true, title: 'Office closed on Friday for maintenance', from: 'Facilities', where: 'announcements', age: '2h', why: 'fyi 50 · chat +30 · unread +10 · 2 h −10 = 80' },
+  { id: 'm4', src: 'mail', tri: 'fyi', unread: true, title: 'Weekly product digest', from: 'Product', where: 'Updates', age: '6h', why: 'fyi 50 · mail +15 · unread +10 · 6 h −30 = 45' },
+  { id: 'j3', src: 'jira', tri: 'fyi', unread: false, title: 'APP-350 moved to Done', from: 'watching', where: 'Done', age: '1d', why: 'fyi 50 · jira +0 · 1 d −40 = 10' },
+]
+// sorted by score (the why text ends with it); the pinned calendar item sits under the urgent ones
+const scoreOf = (i) => (i.inline ? 250 : Number(i.why.match(/= (\d+)/)[1]))
+ITEMS.sort((a, b) => scoreOf(b) - scoreOf(a))
+// done / snoozed: id -> { kind, label, at }
+const OFF = { m3: { kind: 'done', label: 'Mentioned on APP-377: "@you does this match the spec?"', src: 'mail', at: '11:20' },
+  x1: { kind: 'snooze', label: 'Vendor security questionnaire', src: 'mail', at: 'until tomorrow 9:00' } }
+let toast = null, menu = null
+const SRC = { chat: { label: 'Chat', badge: 'CHAT', color: 'var(--chat)' }, mail: { label: 'Mail', badge: 'MAIL', color: 'var(--mail)' }, jira: { label: 'Jira', badge: 'JIRA', color: 'var(--jira)' }, cal: { label: 'Cal', badge: 'CAL', color: 'var(--cal)' } }
+const TRI = { urgent: 'URGENT', action: 'ACT', fyi: 'FYI' }
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+
+function strip() {
+  const lo = 8 * 60, hi = 19 * 60, pct = (m) => ((m - lo) / (hi - lo)) * 100
+  let h = ''
+  for (let m = lo; m < hi; m += 60) h += `<div class="hr" style="left:${pct(m)}%"><span>${m / 60}</span></div>`
+  EVENTS.forEach((e, i) => {
+    const cls = ['ev', e.past && 'past', e.unans && 'unans', NOW >= e.from && NOW < e.to && 'cur'].filter(Boolean).join(' ')
+    h += `<div class="${cls}" title="${esc(e.title)}" style="left:${pct(e.from)}%;width:calc(${pct(e.to) - pct(e.from)}% - 2px);top:${i % 2 ? 21 : 3}px">${esc(e.title)}</div>`
+  })
+  h += `<div class="now" style="left:${pct(NOW)}%"></div>`
+  return `<div class="strip">${h}</div>`
+}
+function calBlock(where) {
+  const up = UPCOMING.map((u) => `<li><span class="tm">${u.tm}</span><span class="nm">${esc(u.nm)}</span>${u.q ? `<span class="q">${u.q}</span><button class="btn">Accept</button>` : ''}</li>`).join('')
+  return `<div class="cal ${where}">
+    <div class="cal-h"><span class="t">Today · Tue 3 Nov</span><span class="more">5 events · tomorrow first 10:00</span><button class="icon" title="Collapse">▾</button></div>
+    ${strip()}
+    <div class="next"><span class="when">in 18 min</span><span class="what">14:00 Design review: onboarding</span><button class="btn pri">Join</button></div>
+    <ul class="up">${up}</ul>
+  </div>`
+}
+const live = () => ITEMS.filter((i) => !OFF[i.id])
+function counts() {
+  const c = { all: 0, chat: 0, mail: 0, jira: 0, off: Object.keys(OFF).length }
+  for (const i of live()) if (i.src !== 'cal') { c.all++; c[i.src]++ }
+  return c
+}
+function row(i) {
+  const s = SRC[i.src]
+  const m = menu === i.id ? `<div class="menu">
+      <div class="h">Snooze until…</div>
+      <button data-snz="1 h">1 hour<kbd>1</kbd></button>
+      <button data-snz="14:00">This afternoon, 14:00<kbd>2</kbd></button>
+      <button data-snz="tomorrow 9:00">Tomorrow 9:00<kbd>3</kbd></button>
+      <button data-snz="it changes">Until it changes<kbd>4</kbd></button>
+    </div>` : ''
+  return `<li class="row${i.unread ? ' unread' : ''}${S.sel === i.id ? ' sel' : ''}${i.back ? ' back' : ''}" data-id="${i.id}">
+    <span class="badge b-${i.src}">${s.badge}</span>
+    <div class="body">
+      <div class="l1"><span class="title">${esc(i.title)}</span><span class="age">${i.age}</span></div>
+      <div class="l2"><span class="tri ${i.tri}">${TRI[i.tri]}</span>${esc(i.from)} · ${esc(i.where)}</div>
+      <div class="why">${esc(i.why)}</div>
+    </div>
+    <span class="acts">${i.src === 'cal' ? '<button class="btn pri">Join</button>' : `<button class="btn" data-done title="Done (e): hidden until it changes${i.src === 'jira' ? '' : '; also marked read in ' + s.label}">✓</button><button class="btn" data-menu title="Snooze (s)">⏱</button>`}</span>
+    ${m}
+  </li>`
+}
+function offList() {
+  const rows = Object.entries(OFF).map(([id, o]) => `<li class="row snz" data-off="${id}">
+    <span class="badge b-${o.src}">${SRC[o.src].badge}</span>
+    <div class="body"><div class="l1"><span class="title">${esc(o.label)}</span><span class="age">${o.kind === 'done' ? 'done ' + o.at : 'snoozed ' + o.at}</span></div>
+    <div class="l2">${o.kind === 'done' ? 'comes back when it changes' : 'comes back at the top when the time is up'}</div></div>
+    <span class="acts"><button class="btn" data-restore>Back to inbox</button></span></li>`).join('')
+  return rows ? `<ul class="list">${rows}</ul>` : '<div class="empty">Nothing done or snoozed today.</div>'
+}
+function list() {
+  if (S.filter === 'off') return offList()
+  let items = live().filter((i) => (S.cal === 'inline' || !i.inline) && (S.filter === 'all' || i.src === S.filter))
+  if (!items.length) return '<div class="empty">Inbox zero. ☕</div>'
+  const cut = S.more ? items.length : Math.min(items.length, 9)
+  const shown = items.slice(0, cut)
+  const fyiAt = shown.findIndex((i) => i.tri === 'fyi')
+  let h = ''
+  shown.forEach((i, n) => { if (n === fyiAt) h += '<div class="sep"><span>FYI</span></div>'; h += row(i) })
+  const rest = items.length - cut
+  return `<ul class="list">${h}</ul>` + (rest > 0 ? `<div class="fold"><span>${rest} lower in the list</span><button data-act="more">Show all</button></div>` : '')
+}
+function panel() {
+  const c = counts()
+  const chip = (k, label, color) => `<button class="chip${S.filter === k ? ' on' : ''}" data-f="${k}">${color ? `<i style="background:${color}"></i>` : ''}${label}<span class="n">${c[k]}</span></button>`
+  const head = `<div class="ph"><span class="t">Inbox</span><span class="upd">updated 1 min ago</span><button class="icon" title="Refresh">⟳</button><button class="icon" title="Settings">⚙</button></div>
+    <div class="chips">${chip('all', 'All')}${chip('chat', 'Chat', 'var(--chat)')}${chip('mail', 'Mail', 'var(--mail)')}${chip('jira', 'Jira', 'var(--jira)')}<button class="chip done${S.filter === 'off' ? ' on' : ''}" data-f="off">Done &amp; snoozed<span class="n">${c.off}</span></button></div>`
+  const err = '<div class="src-err">Jira: signed out, showing the last 4 items from 12:58. <u>Sign in</u></div>'
+  if (S.cal === 'side' && S.width === 'wide') {
+    return head + `<div class="wide-body"><div class="col">${list()}</div><div class="cal-side">${calBlock('')}</div></div>`
+  }
+  const top = S.cal === 'top' || (S.cal === 'side' && S.width !== 'wide') ? calBlock('') : ''
+  const bottom = S.cal === 'bottom' ? calBlock('bottom') : ''
+  const t = toast ? `<div class="toast">${esc(toast.text)}<button data-undo>Undo</button></div>` : ''
+  const keys = '<div class="keys"><kbd>j</kbd><kbd>k</kbd> move <kbd>Enter</kbd> open <kbd>e</kbd> done <kbd>s</kbd> snooze <kbd>u</kbd> undo</div>'
+  return head + top + list() + bottom + t + keys
+}
+
+function settings() {
+  const srcRow = (name, color, provider, opts, n, on) => `<tr>
+    <td class="grip">⋮⋮</td>
+    <td><span style="color:${color};font-weight:600">${name}</span></td>
+    <td><select>${opts.map((o) => `<option${o === provider ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+    <td><input type="number" value="${n}"></td>
+    <td><input type="number" value="${name === 'Chat' ? 30 : name === 'Mail' ? 15 : 0}"></td>
+    <td><input type="checkbox"${on ? ' checked' : ''}></td></tr>`
+  return `<div class="set">
+    <h3>Sources</h3>
+    <div class="hint">Read through each plugin's service, never its data. The weight orders items of the same level: keep it below the gap between levels (150) and an urgent Jira ticket still beats a Chat action.</div>
+    <table class="src"><tr><th></th><th>Source</th><th>Provider</th><th>Items</th><th>Weight</th><th>On</th></tr>
+      ${srcRow('Chat', 'var(--chat)', 'Google Chat', ['Google Chat', 'none'], 10, true)}
+      ${srcRow('Mail', 'var(--mail)', 'Gmail', ['Gmail', 'none'], 10, true)}
+      ${srcRow('Jira', 'var(--jira)', 'Jira', ['Jira', 'none'], 8, true)}
+    </table>
+
+    <h3>Priority</h3>
+    <div class="hint">Score = source weight + triage level + boosts − age. Highest first.</div>
+    <div class="rules">
+      <label>Urgent</label><input type="number" value="300">
+      <label>Action</label><input type="number" value="150">
+      <label>FYI</label><input type="number" value="50">
+      <label>Noise<small>hidden below 0</small></label><input type="number" value="-50">
+      <label>Unread<small>read items sink</small></label><input type="number" value="10">
+      <label>Direct message / mentions me</label><input type="number" value="20">
+      <label>Jira: due within 2 days</label><input type="number" value="25">
+      <label>Age<small>points lost per hour, at most 40</small></label><input type="number" value="5">
+      <label>Hide a Jira mail when its issue is listed</label><input type="checkbox" checked>
+    </div>
+    <div class="formula">Jira "PROD down", urgent:  300 + 0 + 10 − 0 = 310<br>Chat "approve notes", action: 150 + 30 + 20 + 10 − 2 = 208</div>
+
+    <h3>Done and snooze</h3>
+    <div class="rules">
+      <label>Done also marks read at the source<small>Chat and Gmail; Jira items are only hidden here</small></label><input type="checkbox" checked>
+      <label>A done item comes back when it changes<small>a new message, comment or status</small></label><input type="checkbox" checked>
+      <label>"This afternoon" means</label><select><option>14:00</option><option>15:00</option></select>
+      <label>"Tomorrow" means</label><select><option>9:00</option><option>8:00</option><option>10:00</option></select>
+      <label>Kept app-wide<small>one inbox: done in one window is done in all</small></label><input type="checkbox" checked disabled>
+    </div>
+
+    <h3>Calendar</h3>
+    <div class="rules">
+      <label>Position</label><select><option>Top</option><option>Bottom</option><option>In the list (next events as items)</option><option>Beside the list when wide</option><option>Off</option></select>
+      <label>Upcoming events listed</label><input type="number" value="3">
+      <label>Pin an event to the top of the list<small>minutes before it starts</small></label><input type="number" value="30">
+      <label>Timeline hours</label><select><option>From the day's events</option><option>08–19</option></select>
+    </div>
+  </div>`
+}
+
+function render() {
+  const f = document.getElementById('frame')
+  f.className = 'frame' + (S.width === 'wide' ? ' wide' : '') + (S.why === 'yes' ? ' why-on' : '')
+  f.innerHTML = S.view === 'settings' ? settings() : panel()
+  document.querySelectorAll('.seg').forEach((seg) => seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', S[seg.dataset.k] === b.dataset.v)))
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.seg button')
+  if (b) { S[b.closest('.seg').dataset.k] = b.dataset.v; return render() }
+  const chip = e.target.closest('.chip')
+  if (chip) { S.filter = chip.dataset.f; return render() }
+  if (e.target.closest('[data-act=more]')) { S.more = true; return render() }
+  if (e.target.closest('.icon[title=Settings]')) { S.view = 'settings'; return render() }
+  const r = e.target.closest('.row')
+  if (e.target.closest('[data-undo]')) return undo()
+  if (r && e.target.closest('[data-restore]')) { delete OFF[r.dataset.off]; return render() }
+  if (r && e.target.closest('[data-done]')) return off(r.dataset.id, 'done', 'now')
+  if (r && e.target.closest('[data-menu]')) { menu = menu === r.dataset.id ? null : r.dataset.id; return render() }
+  const sz = e.target.closest('[data-snz]')
+  if (r && sz) return off(r.dataset.id, 'snooze', 'until ' + sz.dataset.snz)
+  if (r && r.dataset.id) { menu = null; S.sel = r.dataset.id; render() }
+})
+function off(id, kind, at) {
+  const i = ITEMS.find((x) => x.id === id)
+  if (!i) return
+  const idx = live().indexOf(i)
+  OFF[id] = { kind, label: i.title, src: i.src, at }
+  toast = { id, text: kind === 'done' ? `Done${i.src === 'jira' ? '' : ' · marked read in ' + SRC[i.src].label}` : `Snoozed ${at}` }
+  menu = null
+  const next = live().filter((x) => S.cal === 'inline' || !x.inline)[Math.min(idx, live().length - 1)]
+  S.sel = next ? next.id : null
+  clearTimeout(toast.t); toast.t = setTimeout(() => { toast = null; render() }, 6000)
+  render()
+}
+function undo() { if (!toast) return; delete OFF[toast.id]; S.sel = toast.id; toast = null; render() }
+document.addEventListener('keydown', (e) => {
+  if (S.view !== 'panel' || e.target.closest('input,select')) return
+  const items = live().filter((i) => (S.cal === 'inline' || !i.inline) && (S.filter === 'all' || i.src === S.filter))
+  const at = items.findIndex((i) => i.id === S.sel)
+  if (menu && /^[1-4]$/.test(e.key)) { const v = ['1 h', '14:00', 'tomorrow 9:00', 'it changes'][e.key - 1]; return off(menu, 'snooze', 'until ' + v) }
+  if (e.key === 'Escape' && menu) { menu = null; return render() }
+  if (e.key === 'j') { S.sel = items[Math.min(items.length - 1, at + 1)]?.id; render() }
+  else if (e.key === 'k') { S.sel = items[Math.max(0, at - 1)]?.id; render() }
+  else if (e.key === 'e' && S.sel && items[at]?.src !== 'cal') off(S.sel, 'done', 'now')
+  else if (e.key === 's' && S.sel && items[at]?.src !== 'cal') { menu = S.sel; render() }
+  else if (e.key === 'u') undo()
+})
+render()
+</script>
+</body>
+</html>
