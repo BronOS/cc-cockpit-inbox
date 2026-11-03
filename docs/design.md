@@ -1,7 +1,21 @@
 # Inbox (bronos.inbox)
 
-Status: draft 2026-11-03, from the user's answers and the mock-up (`docs/mockup.html`, approved as
-"just perfect"). External plugin (own repo `BronOS/cc-cockpit-inbox`, for the marketplace), built
+Status: built as 0.1.0 (2026-11-03), from the user's answers and the mock-up (`docs/mockup.html`,
+approved as "just perfect"). Where the build differs from the draft below:
+
+- Settings live in `ctx.appStorage` (one `settings` key, validated on every read by
+  `dist/lib/settings.js`), not in a manifest settings schema: the source rows are per provider and
+  providers come and go, which a fixed schema cannot list.
+- The Sources table has no provider dropdown and no drag order (each provider is its own row, in
+  the order the app lists them); the Noise row and the age cap are not in the form (noise is always
+  hidden; the cap stays 40).
+- Undo takes back the last done or snooze only; a read mark set at the source stays.
+- "In the list" shows no calendar block, only the pinned CAL row.
+- A snooze is announced only when it ended in the last 15 minutes and its item is still listed (so
+  opening the app after a night does not ring for every snooze), at most 3 a refresh.
+- The title bar (updated time, refresh, settings) is the app's (`ctx.panels.header`); the panel posts
+  `visible` on focus and visibility, so a done in another window shows at once.
+- `ccc inbox` names an item by its number or a ref `<pluginId>:<id>`. External plugin (own repo `BronOS/cc-cockpit-inbox`, for the marketplace), built
 like the Gmail, Chat, Jira and Calendar plugins. The user's daily driver: one panel that merges the
 top items of Chat, Mail and Jira, re-ranked by Inbox's own rules, with today's calendar.
 

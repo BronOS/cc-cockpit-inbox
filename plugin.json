@@ -21,7 +21,7 @@
       {
         "name": "inbox",
         "summary": "Inbox: the ranked list, open, mark done or snooze an item",
-        "usage": "inbox [list] | open <n|key> | done <n|key> | snooze <n|key> 1h|afternoon|tomorrow|changes | help"
+        "usage": "inbox [list] | open <n|ref> | done <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | help"
       }
     ]
   },
