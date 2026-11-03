@@ -20,11 +20,14 @@ const { describeOf, itemsOf, featuresOf, calDayOf, calUpcomingOf, httpsUrl } = r
 const { rank, DEFAULT_RULES } = require('./lib/rank')
 const { createState, untilOf } = require('./lib/state')
 const S = require('./lib/settings')
+const CLI = require('./lib/cli')
 
 const PANEL = 'main'
 const FEED = 'inbox-feed'
 const CALENDAR = 'calendar'
 const CALL_MS = 10000
+// How long `ccc inbox` waits for the first refresh (the plugin command limit is 30 s).
+const CLI_WAIT_MS = 20000
 const DEBOUNCE_MS = 1000
 const REFRESH_S = 60
 const UNDO_MS = 6000
@@ -526,6 +529,44 @@ function createInbox(ctx, opts = {}) {
   disposers.push(feeds.onChange(() => void sync().then(publish, (e) => ctx.log.warn(`sync: ${why(e)}`))))
   disposers.push(ctx.schedule(REFRESH_S, () => tick()))
   const first = tick().catch((e) => ctx.log.error(`first refresh: ${why(e)}`))
+
+  // ---- `ccc inbox` (lib/cli.js) ----
+
+  if (ctx.cli && typeof ctx.cli.register === 'function') {
+    const unregister = ctx.cli.register('inbox', async (argv) => {
+      const p = CLI.parse(argv)
+      if (p.error) return { stderr: `${p.error}\n`, code: 2 }
+      if (p.cmd === 'help') return { stdout: CLI.HELP }
+      // The first refresh has per-call timeouts; this deadline is the belt to them.
+      let timer
+      await Promise.race([first, new Promise((r) => { timer = timers.setTimeout(r, opts.cliWaitMs ?? CLI_WAIT_MS) })])
+      timers.clearTimeout(timer)
+      const rows = ranked.rows
+      if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now()) }
+      const got = CLI.resolve(rows, p.target)
+      if (got.error) return { stderr: `${got.error}\n`, code: 1 }
+      const row = got.row
+      const title = CLI.oneLine(row.title, CLI.MAX_TITLE)
+      if (row.calendar && p.cmd !== 'open') return { stderr: `"${title}" is a calendar item: it can be opened, not marked done or snoozed.\n`, code: 1 }
+      const t = now()
+      try {
+        if (p.cmd === 'open') {
+          await act(row.calendar ? { type: 'calOpen', eventId: row.id } : { type: 'open', key: row.key })
+          return { stdout: `Opened ${title}\n` }
+        }
+        if (p.cmd === 'done') {
+          await act({ type: 'done', key: row.key })
+          return { stdout: `Done: ${title}\n` }
+        }
+        const until = untilOf(p.choice, t, { afternoon: settings.afternoon, morning: settings.morning })
+        await act({ type: 'snooze', key: row.key, choice: p.choice })
+        return { stdout: `Snoozed until ${until === null ? 'it changes' : CLI.when(until)}: ${title}\n` }
+      } catch (e) {
+        return { stderr: `${p.cmd} failed: ${why(e)}\n`, code: 1 }
+      }
+    })
+    disposers.push(unregister)
+  }
 
   function dispose() {
     disposed = true

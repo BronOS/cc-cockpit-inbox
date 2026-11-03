@@ -64,8 +64,10 @@ test('hostile titles stay plain strings; colours outside the palette become grey
   assert.equal(R.colorClass('red'), 'c-red')
   assert.equal(R.colorClass('red; background:url(x)'), 'c-grey')
   // main.js builds every element with textContent: no markup sinks at all.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'panels', 'main.js'), 'utf8')
-  assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/)
+  for (const f of ['main.js', 'settings.js', 'settingslogic.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'panels', f), 'utf8')
+    assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/)
+  }
 })
 
 test('Done & snoozed rows', () => {
