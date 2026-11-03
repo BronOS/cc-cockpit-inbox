@@ -31,6 +31,8 @@ test('done hides while the rev is the same; a new rev brings it back marked', as
   await st.done(row('a'), NOW)
   assert.deepEqual(look(st, NOW, row('a')), { hidden: true, extra: 0, back: false })
   assert.deepEqual(look(st, NOW, row('a', 'r2')), { hidden: false, extra: 0, back: true })
+  // The setting off: done stays done.
+  assert.equal(st.view(NOW, 500, { doneReturns: false }).hidden(rankKey('bronos.mail', 'a'), row('a', 'r2')), true)
 })
 
 test('snooze until a time: hidden before, back with the bonus after, for the rest of that day only', async () => {

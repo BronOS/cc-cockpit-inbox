@@ -96,10 +96,10 @@ function createState(store) {
   }
 
   /** What this entry says about the item now: hidden, its bonus, back with something new. */
-  function judge(entry, item, now, bonus) {
+  function judge(entry, item, now, bonus, doneReturns) {
     if (!entry) return { hidden: false, extra: 0, back: false }
     const changed = item.rev !== entry.rev
-    if (entry.kind === 'done') return changed ? { hidden: false, extra: 0, back: true } : { hidden: true, extra: 0, back: false }
+    if (entry.kind === 'done') return changed && doneReturns ? { hidden: false, extra: 0, back: true } : { hidden: true, extra: 0, back: false }
     // snooze
     const timeUp = entry.until !== null && entry.until !== undefined && now >= entry.until
     if (!changed && !timeUp) return { hidden: true, extra: 0, back: false }
@@ -108,9 +108,12 @@ function createState(store) {
     return { hidden: false, extra: today ? bonus : 0, back: changed }
   }
 
-  /** The `state` argument of rank.js for this moment. */
-  function view(now, bonus) {
-    const at = (key, item) => judge(entries.get(key), item, now, bonus)
+  /**
+   * The `state` argument of rank.js for this moment. `doneReturns: false` (the setting "A done item
+   * comes back when it changes" off) keeps a done item hidden whatever happens to it.
+   */
+  function view(now, bonus, { doneReturns = true } = {}) {
+    const at = (key, item) => judge(entries.get(key), item, now, bonus, doneReturns)
     return { hidden: (k, it) => at(k, it).hidden, extra: (k, it) => at(k, it).extra, back: (k, it) => at(k, it).back }
   }
 
