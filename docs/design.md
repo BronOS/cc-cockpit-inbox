@@ -57,7 +57,7 @@ had done and snooze). Port its decisions, not its user-specific text.
   weight, keyed by plugin id. A provider disabled or uninstalled leaves the list; one enabled later
   joins it, on and with the defaults of its `kind` (decision 1 is Inbox's per-source settings).
 - **`calendar`** stays a single-provider service (`ctx.services.use`): Inbox draws one strip.
-- Manifest: `services: { uses: { "inbox-feed": 1, "calendar": 1 } }`; one panel (default zone
+- Manifest: `services: { uses: { "inbox-feed": 1, "calendar": 1 }, collects: ["inbox-feed"] }`; one panel (default zone
   right); CLI `ccc inbox` (list, done, snooze, for Claude and scripts). No OAuth, no secrets, no
   network: Inbox has no account of its own.
 - **Cheap reads**: a feed answers from the provider's own cache (what its panel shows), never with an
@@ -81,9 +81,14 @@ had done and snooze). Port its decisions, not its user-specific text.
     reloaded, was enabled or disabled).
 - `ctx.services.use(name)` and the provider pick are unchanged: a single-provider consumer still
   gets the picked one, and the Plugins page still offers the pick (another plugin may `use` the
-  name). Its "several providers, pick one" warning is left out for a service whose every consumer
-  in the project calls `useAll` (the manifest says so: `services.uses` value `{ "version": 1, "all": true }`,
-  or the plan finds a simpler signal).
+  name). Its "several providers, pick one" warning is left out for a name no enabled plugin of the
+  project uses without collecting it.
+- Declaration: `services: { uses: { "inbox-feed": 1 }, collects: ["inbox-feed"] }`; `collects` is
+  a subset of `uses`, and `useAll` refuses other names. `services` is strict in the manifest schema,
+  so an older app refuses Inbox's manifest: Inbox needs 0.9.7 (README, marketplace description).
+  The source plugins don't use the key and keep loading on older apps.
+- Done and snooze are one app-storage key per item (no shared record to read-modify-write, since
+  app storage has no compare-and-set); another window's change shows on the next refresh or focus.
 - Same rules as `use`: plain data both ways, the provider's errors as fresh Errors, cycle detection,
   `caller()` in the provider. Guide text (`ccc guide api`, services), SDK types
   (`ServicesApi.useAll`, `ServiceSet`), example repo sync, unit tests in `test/unit/` for the host
