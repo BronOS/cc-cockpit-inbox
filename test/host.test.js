@@ -256,3 +256,13 @@ test('junk from the panel is ignored', async () => {
   assert.deepEqual(ids(ctx), ['c1'])
   inbox.dispose()
 })
+
+test('no providers at all: an empty list, no chips, no badge, and the CLI says so', async () => {
+  const { ctx, inbox } = setup({})
+  await inbox.first
+  const st = ctx.lastState()
+  assert.deepEqual([st.rows, st.chips, st.calendar], [[], [], null])
+  assert.deepEqual(ctx.badges, [null])
+  assert.match((await ctx.runCli([])).stdout, /Inbox zero/)
+  inbox.dispose()
+})
