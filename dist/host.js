@@ -31,6 +31,9 @@ const CLI_WAIT_MS = 20000
 const DEBOUNCE_MS = 1000
 const REFRESH_S = 60
 const UNDO_MS = 6000
+// The Read chip: the newest read messages of every source with `recent` (feature), at most this many
+// from each and in all.
+const READ_LIMIT = 20
 // A snooze that ended while the app was closed is not announced when it opens: only one that ended
 // in the last 15 minutes, and at most 3 a refresh (the app caps notifications at 10 a minute).
 const NOTIFY_WITHIN_MS = 15 * 60000
@@ -77,6 +80,7 @@ function createInbox(ctx, opts = {}) {
   const sources = new Map()
   const cal = { handle: null, unsub: null, day: null, upcoming: [], error: null, timer: null, gen: 0 }
   let ranked = { rows: [], hiddenByDedupe: 0 }
+  let lastRead = []
   let lastUndo = null
   let lastBadge
   let updatedAt = null
@@ -88,7 +92,7 @@ function createInbox(ctx, opts = {}) {
   // ---- sources ----
 
   function newSource(p) {
-    return { pluginId: p.pluginId, handle: p.handle, desc: null, features: new Set(), items: [], asOf: null, state: 'ok', message: null, error: null, stale: false, gen: 0, timer: null, loaded: false, describing: null }
+    return { pluginId: p.pluginId, handle: p.handle, desc: null, features: new Set(), items: [], asOf: null, state: 'ok', message: null, error: null, stale: false, gen: 0, timer: null, loaded: false, describing: null, recent: [] }
   }
 
   /** Bring `sources` in line with the providers now; resolves once the new ones were read. */
@@ -173,6 +177,34 @@ function createInbox(ctx, opts = {}) {
       s.stale = s.items.length > 0
       ctx.log.warn(`source ${id}: ${why(e)}`)
     }
+    if (s.features.has('recent')) await refreshRecent(s, current)
+  }
+
+  /**
+   * The source's read messages for the Read chip (`recent`, optional in feed v1). Only read rows are
+   * kept (a provider that sends unread ones there would list them twice); a failure keeps the last
+   * answer and only logs: the main list's error line is about `items`.
+   */
+  async function refreshRecent(s, current) {
+    try {
+      const ans = itemsOf(await call(s.handle.recent({ limit: READ_LIMIT }), `${s.pluginId} recent`))
+      if (!current()) return
+      if (ans.state === 'ok' || ans.items.length > 0) s.recent = ans.items.filter((it) => !it.unread)
+    } catch (e) {
+      if (current()) ctx.log.warn(`source ${s.pluginId} recent: ${why(e)}`)
+    }
+  }
+
+  /** The Read chip's rows: every on source's read messages, newest first, as list rows. */
+  function readRows() {
+    const out = []
+    for (const s of sources.values()) {
+      if (!s.desc || !s.features.has('recent') || !S.sourceOf(settings, s.pluginId, s.desc.kind).on) continue
+      for (const it of s.recent) {
+        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true })
+      }
+    }
+    return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, READ_LIMIT)
   }
 
   function onFeedChanged(_data, pluginId) {
@@ -289,6 +321,7 @@ function createInbox(ctx, opts = {}) {
         ...(problem ? { problem } : {}),
       })
     }
+    lastRead = readRows()
     const today = state.today(t).map((e) => ({ pluginId: e.pluginId, id: e.id, title: e.title || '', badge: e.badge || '', kind: e.kind, at: e.at, until: e.until ?? null }))
     const c = settings.calendar
     return {
@@ -299,6 +332,8 @@ function createInbox(ctx, opts = {}) {
       hiddenByDedupe,
       chips,
       today,
+      // null: no source offers read messages (no Read chip).
+      read: [...sources.values()].some((s) => s.features.has('recent')) ? lastRead : null,
       undo: lastUndo && t < lastUndo.until ? { label: lastUndo.label, until: lastUndo.until } : null,
       calendar:
         c.position === 'off' || (!cal.day && !cal.error)
@@ -412,6 +447,8 @@ function createInbox(ctx, opts = {}) {
   // ---- actions from the panel ----
 
   const rowByKey = (key) => (typeof key === 'string' ? ranked.rows.find((r) => r.key === key && !r.calendar) || null : null)
+  // Read rows open like any other, and never take done or snooze (they are done already).
+  const readByKey = (key) => (typeof key === 'string' ? lastRead.find((r) => r.key === key) || null : null)
 
   function setUndo(token, label, t) {
     lastUndo = { token, label, until: t + UNDO_MS }
@@ -429,6 +466,12 @@ function createInbox(ctx, opts = {}) {
         await tick()
         return
       case 'open': {
+        const read = rowByKey(m.key) ? null : readByKey(m.key)
+        if (read) {
+          const rs = sources.get(read.pluginId)
+          if (rs) await call(rs.handle.open(read.id), `${read.pluginId} open`)
+          return
+        }
         const row = rowByKey(m.key)
         const s = row && sources.get(row.pluginId)
         if (!s) return

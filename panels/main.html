@@ -49,7 +49,8 @@
       .chip i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--src); }
       .chip .n { color: var(--cc-fg-subtle); margin-left: 4px; }
       .chip.problem .n::after { content: " !"; color: var(--cc-status-needs-permission, #e5a00d); }
-      .chip.done { margin-left: auto; }
+      .chip.done, .chip.read { margin-left: auto; }
+      .chip.read ~ .chip.done { margin-left: 0; }
       .src-err { margin: 6px 10px; padding: 5px 8px; border-radius: 5px; background: color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 12%, transparent); color: var(--cc-fg); font-size: 12px; overflow-wrap: anywhere; }
 
       .cal { padding: 8px 10px; border-bottom: 1px solid var(--cc-border); }

@@ -266,3 +266,31 @@ test('no providers at all: an empty list, no chips, no badge, and the CLI says s
   assert.match((await ctx.runCli([])).stdout, /Inbox zero/)
   inbox.dispose()
 })
+
+test('the Read chip: read messages of the sources that offer them, newest first; they open and never take done', async () => {
+  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false, at: NOW - 3 * HOUR }), item('r2', { unread: false, at: NOW - HOUR }), item('sneaky', { unread: true })] })
+  const jira = fakeFeed(JIRA, [item('APP-1')], { markRead: false })
+  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.jira': jira } })
+  await inbox.first
+  const st = ctx.lastState()
+  assert.deepEqual(st.read.map((r) => r.id), ['r2', 'r1'], 'unread rows from recent are left out')
+  assert.equal(st.read[0].read, true)
+  assert.deepEqual(chat.calls.find((c) => c[0] === 'recent')[1], { limit: 20 })
+  await inbox.act({ type: 'open', key: st.read[0].key })
+  assert.deepEqual(chat.calls.filter((c) => c[0] === 'open'), [['open', 'r2']])
+  await inbox.act({ type: 'done', key: st.read[0].key })
+  await inbox.act({ type: 'snooze', key: st.read[0].key, choice: '1h' })
+  assert.equal(chat.calls.filter((c) => c[0] === 'markRead').length, 0)
+  assert.equal(ctx.lastState().today.length, 0)
+  // A source switched off takes its read rows with it.
+  await inbox.act({ type: 'saveSettings', settings: { sources: { 'bronos.chat': { on: false } } } })
+  assert.deepEqual(ctx.lastState().read, [])
+  inbox.dispose()
+})
+
+test('no source offers read messages: no Read chip', async () => {
+  const { ctx, inbox } = setup({ feeds: { 'bronos.jira': fakeFeed(JIRA, [item('APP-1')], { markRead: false }) } })
+  await inbox.first
+  assert.equal(ctx.lastState().read, null)
+  inbox.dispose()
+})

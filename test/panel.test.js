@@ -198,3 +198,14 @@ test('a click on the chip that is on goes back to All', () => {
   assert.equal(R.chipFilter('off', 'p.chat'), 'p.chat')
   assert.equal(R.chipFilter('all', 'all'), 'all')
 })
+
+test('the Read chip shows when a source offers read messages; read rows only open', () => {
+  const base = { rows: [], chips: [], today: [] }
+  assert.equal(R.chipsModel({ ...base, read: null }).some((c) => c.filter === 'read'), false)
+  assert.deepEqual(R.chipsModel({ ...base, read: [{}, {}] }).find((c) => c.filter === 'read'), { filter: 'read', label: 'Read', count: 2, read: true })
+  const rowOf = () => ({ read: true })
+  assert.equal(R.keyAction({ sel: 'x', menu: null }, 'e', ['x'], rowOf), null)
+  assert.equal(R.keyAction({ sel: 'x', menu: null }, 's', ['x'], rowOf), null)
+  assert.deepEqual(R.keyAction({ sel: 'x', menu: null }, 'Enter', ['x'], rowOf), { type: 'open', key: 'x' })
+  assert.equal(R.chipFilter('read', 'read'), 'all')
+})

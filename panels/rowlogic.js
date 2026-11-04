@@ -53,6 +53,8 @@ function chipsModel(state) {
   return [
     { filter: 'all', label: 'All', count: rows.filter((r) => !r.calendar).length },
     ...chips.map((c) => ({ filter: c.pluginId, label: c.label, count: c.count, color: c.color, problem: Boolean(c.problem) })),
+    // Read messages, when a source offers them (`state.read` is null when none does).
+    ...(state && Array.isArray(state.read) ? [{ filter: 'read', label: 'Read', count: state.read.length, read: true }] : []),
     { filter: 'off', label: 'Done & snoozed', count: ((state && state.today) || []).length, done: true },
   ]
 }
@@ -160,10 +162,11 @@ function keyAction(ui, key, keys, rowOf, mods) {
       return keys.length ? { type: 'select', key: keys[Math.max(0, at - 1)] } : null
     case 'Enter':
       return sel ? { type: 'open', key: sel } : null
+    // A calendar row and a read row only open: neither can be done or snoozed.
     case 'e':
-      return sel && row && !row.calendar ? { type: 'done', key: sel } : null
+      return sel && row && !row.calendar && !row.read ? { type: 'done', key: sel } : null
     case 's':
-      return sel && row && !row.calendar ? { type: 'menu', key: sel } : null
+      return sel && row && !row.calendar && !row.read ? { type: 'menu', key: sel } : null
     case 'u':
       return { type: 'undo' }
     default:

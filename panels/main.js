@@ -100,7 +100,9 @@ function rowEl(r) {
       m.why ? el('div', { class: 'why', text: m.why }) : null)
   )
   const acts = el('span', { class: 'acts' })
-  if (m.calendar) {
+  if (r.read) {
+    // Read already: it only opens (a click on the row), to look at it again or discuss it.
+  } else if (m.calendar) {
     if (m.join) acts.append(button('Join', () => post('join', { eventId: r.id }), 'Join the meeting', 'primary'))
   } else {
     const chip = (state.chips || []).find((c) => c.pluginId === r.pluginId)
@@ -141,8 +143,20 @@ function offList() {
   return ul
 }
 
+/** The Read chip: the sources' read messages, newest first; a click opens one as from the list. */
+function readList() {
+  const rows = state.read || []
+  if (!rows.length) {
+    return el('div', { class: 'empty' }, el('div', { text: 'No read messages from the last days.' }), button('← Back to the list', () => { ui.filter = 'all'; render() }, 'Show the inbox again', 'link'))
+  }
+  const ul = el('ul', { class: 'list', role: 'listbox' })
+  for (const r of rows) ul.append(rowEl(r))
+  return ul
+}
+
 function listEl() {
   if (ui.filter === 'off') return offList()
+  if (ui.filter === 'read') return readList()
   const m = listModel(state.rows, ui.filter, ui.showAll)
   if (!m.items.length) {
     const loading = (state.chips || []).some((c) => !c.loaded && !c.problem)
@@ -163,7 +177,7 @@ function listEl() {
 function chipsEl() {
   const box = el('div', { class: 'chips' })
   for (const c of chipsModel(state)) {
-    const cls = ['chip', ui.filter === c.filter && 'on', c.done && 'done', c.problem && 'problem', c.color && colorClass(c.color)].filter(Boolean).join(' ')
+    const cls = ['chip', ui.filter === c.filter && 'on', c.done && 'done', c.read && 'read', c.problem && 'problem', c.color && colorClass(c.color)].filter(Boolean).join(' ')
     box.append(
       el('button', { type: 'button', class: cls, onclick: () => { ui.filter = chipFilter(ui.filter, c.filter); ui.showAll = false; ui.menu = null; render() } },
         c.color ? el('i', {}) : null, c.label, el('span', { class: 'n', text: String(c.count) }))
@@ -176,6 +190,7 @@ function chipsEl() {
 
 function selectableKeys() {
   if (ui.filter === 'off') return []
+  if (ui.filter === 'read') return (state.read || []).map((r) => r.key)
   return listModel(state.rows, ui.filter, ui.showAll).items.map((x) => x.row.key)
 }
 
@@ -197,7 +212,7 @@ function render() {
     r.append(renderSettings(state, { post, close: () => { ui.view = 'list'; render() } }))
     return
   }
-  if (ui.filter !== 'all' && ui.filter !== 'off' && !(state.chips || []).some((c) => c.pluginId === ui.filter)) ui.filter = 'all'
+  if (ui.filter === 'read' ? !Array.isArray(state.read) : ui.filter !== 'all' && ui.filter !== 'off' && !(state.chips || []).some((c) => c.pluginId === ui.filter)) ui.filter = 'all'
   // Keep the selection on a row that is still there.
   const keys = selectableKeys()
   if (!keys.includes(ui.sel)) ui.sel = keys[0] || null
@@ -254,7 +269,7 @@ function focusSel() {
 document.addEventListener('keydown', (ev) => {
   if (!state || state.fatal || ui.view !== 'list') return
   if (ev.target && ev.target.closest && ev.target.closest('input, select, textarea')) return
-  const rows = new Map((state.rows || []).map((r) => [r.key, r]))
+  const rows = new Map([...(state.rows || []), ...(ui.filter === 'read' ? state.read || [] : [])].map((r) => [r.key, r]))
   const a = keyAction(ui, ev.key, selectableKeys(), (k) => rows.get(k), { alt: ev.altKey, ctrl: ev.ctrlKey, meta: ev.metaKey })
   if (!a) return
   ev.preventDefault()

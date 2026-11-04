@@ -52,6 +52,9 @@ A mail about an issue that Jira already lists is hidden, and the issue shows "+1
 - **Undo** (the toast, or `u`) takes back the last done or snooze within 6 seconds. A read mark set
   at the source stays.
 - **Done & snoozed** (the chip) lists today's items, each with "Back to inbox".
+- **Read** (the chip) lists the messages you already read in Chat and Gmail, newest first, so you can
+  open one again (and discuss it with Claude) without leaving Inbox. A source shows here when its feed
+  offers `recent`.
 
 Done and snooze are kept app-wide on this machine: an item done in one window is gone in all of
 them. Nothing syncs between machines. An entry is dropped 14 days after its item was last listed.

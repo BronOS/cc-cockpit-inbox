@@ -15,7 +15,9 @@ approved as "just perfect"). Where the build differs from the draft below:
   opening the app after a night does not ring for every snooze), at most 3 a refresh.
 - The title bar (updated time, refresh, settings) is the app's (`ctx.panels.header`); the panel posts
   `visible` on focus and visibility, so a done in another window shows at once.
-- `ccc inbox` names an item by its number or a ref `<pluginId>:<id>`. External plugin (own repo `BronOS/cc-cockpit-inbox`, for the marketplace), built
+- `ccc inbox` names an item by its number or a ref `<pluginId>:<id>`.
+- A **Read** chip (the user, 2026-11-03: "sometimes I need to go back to an already read message to
+  discuss it with Claude"): the sources' read messages through the optional `recent` feed method. External plugin (own repo `BronOS/cc-cockpit-inbox`, for the marketplace), built
 like the Gmail, Chat, Jira and Calendar plugins. The user's daily driver: one panel that merges the
 top items of Chat, Mail and Jira, re-ranked by Inbox's own rules, with today's calendar.
 
@@ -122,6 +124,10 @@ Methods (all async, plain data):
   (the mock-up's "Jira: signed out, showing the last 4 items from 12:58").
 - `open(id)` → `void`: open the item the way the plugin's own row click does.
 - `markRead(id)` → `void` (optional; Chat and Gmail): mark it read at the source. Jira has none.
+- `recent({ limit })` → the `items()` shape (optional, feature `recent`; Chat and Gmail, added
+  2026-11-03): the newest READ messages from the provider's cache (Chat's Recent lane, Gmail's Read
+  lane), newest first, `limit` 1..50. Inbox lists them under its Read chip, newest first and not
+  ranked; a click runs `open(id)`, which must accept these ids too. They take no done or snooze.
 - Event `changed` `{}`: the provider's cache changed (a poll finished, the person acted in its panel).
 
 ```ts

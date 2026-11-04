@@ -43,7 +43,7 @@ function fakeFeed(describe, items = [], opts = {}) {
         return describe
       },
       async features() {
-        return opts.markRead === false ? [] : ['markRead']
+        return [...(opts.markRead === false ? [] : ['markRead']), ...(opts.recent ? ['recent'] : [])]
       },
       async items(o) {
         feed.calls.push(['items', o])
@@ -55,6 +55,14 @@ function fakeFeed(describe, items = [], opts = {}) {
         feed.calls.push(['open', id])
       },
     },
+  }
+  if (opts.recent) {
+    // `opts.recent`: the read rows the provider's read lane holds (Chat Recent, Gmail Read).
+    feed.recent = opts.recent
+    feed.impl.recent = async (o) => {
+      feed.calls.push(['recent', o])
+      return { items: feed.recent.slice(0, (o && o.limit) || 20), asOf: NOW, state: 'ok' }
+    }
   }
   if (opts.markRead !== false) {
     feed.impl.markRead = async (id) => {

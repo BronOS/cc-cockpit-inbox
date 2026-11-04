@@ -149,7 +149,7 @@ function calUpcomingOf(raw) {
 
 /** `features()`'s answer as a set of known names. */
 function featuresOf(raw) {
-  return new Set(Array.isArray(raw) ? raw.filter((f) => f === 'markRead') : [])
+  return new Set(Array.isArray(raw) ? raw.filter((f) => f === 'markRead' || f === 'recent') : [])
 }
 
 module.exports = { CAPS, describeOf, itemOf, itemsOf, eventOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl }
