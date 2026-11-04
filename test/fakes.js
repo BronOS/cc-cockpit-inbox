@@ -43,7 +43,7 @@ function fakeFeed(describe, items = [], opts = {}) {
         return describe
       },
       async features() {
-        return [...(opts.markRead === false ? [] : ['markRead']), ...(opts.recent ? ['recent'] : [])]
+        return [...(opts.markRead === false ? [] : ['markRead']), ...(opts.recent ? ['recent'] : []), ...(opts.markUnread ? ['markUnread'] : [])]
       },
       async items(o) {
         feed.calls.push(['items', o])
@@ -62,6 +62,17 @@ function fakeFeed(describe, items = [], opts = {}) {
     feed.impl.recent = async (o) => {
       feed.calls.push(['recent', o])
       return { items: feed.recent.slice(0, (o && o.limit) || 20), asOf: NOW, state: 'ok' }
+    }
+  }
+  if (opts.markUnread) {
+    // As the plugins do: the read row goes back to the unread items.
+    feed.impl.markUnread = async (id) => {
+      feed.calls.push(['markUnread', id])
+      if (feed.throwOn === 'markUnread') throw new Error('chat: Google refused')
+      const at = feed.recent.findIndex((it) => it.id === id)
+      if (at < 0) throw new Error('chat: unknown id')
+      const [it] = feed.recent.splice(at, 1)
+      feed.items = [{ ...it, unread: true }, ...feed.items]
     }
   }
   if (opts.markRead !== false) {

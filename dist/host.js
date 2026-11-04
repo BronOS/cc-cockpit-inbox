@@ -39,6 +39,9 @@ const ANSWERS = new Set(['accepted', 'tentative', 'declined'])
 const SNOOZES = new Set(['1h', 'afternoon', 'tomorrow', 'changes'])
 const OLD_APP = 'Inbox needs cc-cockpit 0.9.7 or newer (ctx.services.useAll). Update the app.'
 
+// What a failed panel action is called in its notice: the button's words, not the message type.
+const ACTION_NAMES = { open: 'Open', done: 'Done', snooze: 'Snooze', undo: 'Undo', restore: 'Back to inbox', markUnread: 'Mark unread', join: 'Join', respond: 'Accept', calOpen: 'Open the event', saveSettings: 'Saving the settings', refresh: 'Refresh' }
+
 const why = (e) => String((e && e.message) || e || 'failed').slice(0, 300)
 
 /** `p`, or a rejection after `ms` (a provider that never answers must not hold the refresh). */
@@ -205,7 +208,7 @@ function createInbox(ctx, opts = {}) {
     for (const s of sources.values()) {
       if (!s.desc || !s.features.has('recent') || !S.sourceOf(settings, s.pluginId, s.desc.kind).on) continue
       for (const it of s.recent) {
-        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true })
+        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true, canUnread: s.features.has('markUnread') })
       }
     }
     return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, settings.readItems)
@@ -523,6 +526,17 @@ function createInbox(ctx, opts = {}) {
         }
         publish()
         return
+      case 'markUnread': {
+        // A read row back to unread at its source (the Read chip's button). The source's own
+        // `changed` follows; re-reading it here moves the row to the list at once.
+        const read = readByKey(m.key)
+        const s = read && sources.get(read.pluginId)
+        if (!s || !s.features.has('markUnread')) return
+        await call(s.handle.markUnread(read.id), `${read.pluginId} markUnread`)
+        await refreshSource(read.pluginId)
+        publish()
+        return
+      }
       case 'restore': {
         if (typeof m.pluginId !== 'string' || typeof m.id !== 'string') return
         await state.restore(m.pluginId, m.id)
@@ -566,7 +580,7 @@ function createInbox(ctx, opts = {}) {
     } catch (e) {
       ctx.log.warn(`${m.type}: ${why(e)}`)
       try {
-        ctx.panels.post(PANEL, { type: 'notice', text: `${m.type} failed: ${why(e)}` })
+        ctx.panels.post(PANEL, { type: 'notice', text: `${ACTION_NAMES[m.type] || 'That'} failed: ${why(e)}` })
       } catch {
         // the panel went away
       }

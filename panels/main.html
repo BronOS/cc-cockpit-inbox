@@ -114,14 +114,18 @@
       .tri.urgent { color: var(--cc-status-ended, #ff6b6b); } .tri.action { color: #f0a35e; } .tri.fyi { color: var(--cc-fg-subtle); }
       .why { color: var(--cc-fg-subtle); font-size: 11px; margin-top: 2px; display: none; }
       .row.sel .why { display: block; }
-      .acts { position: absolute; right: 8px; top: 5px; display: none; gap: 4px; background: var(--cc-surface-1); padding-left: 6px; }
-      .row:hover .acts, .row.sel .acts, .row:focus-within .acts { display: flex; }
-      .row.sel .acts { background: transparent; }
+      /* The row buttons as in bronos.chat and bronos.gmail: always in the DOM (Tab reaches them), faded
+         out until the row is hovered, selected or has the focus inside; over the right end of the
+         row's second line. */
+      .acts { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 3px; padding: 1px 2px; background: var(--cc-surface-2); border-radius: 4px; box-shadow: 0 1px 3px var(--cc-shadow); opacity: 0; pointer-events: none; transition: opacity 80ms; }
+      .acts:empty { display: none; }
+      .row:hover .acts, .row.sel .acts, .row:focus-within .acts { opacity: 1; pointer-events: auto; }
+      .acts button { font-size: 10px; line-height: 15px; padding: 0 5px; }
       .sep { margin: 6px 10px; border-top: 1px solid var(--cc-border); position: relative; height: 0; }
       .sep span { position: absolute; top: -8px; left: 0; background: var(--cc-bg); padding-right: 6px; color: var(--cc-fg-subtle); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
       .fold { padding: 6px 10px 10px; color: var(--cc-fg-subtle); font-size: 12px; display: flex; justify-content: space-between; }
       .fold button { background: none; border: 0; color: var(--cc-accent); padding: 0; }
-      .menu { position: absolute; right: 8px; top: 30px; z-index: 5; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; padding: 4px; box-shadow: 0 8px 24px var(--cc-shadow, rgba(0,0,0,.4)); min-width: 200px; }
+      .menu { position: absolute; right: 2px; top: calc(100% - 2px); z-index: 5; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; padding: 4px; box-shadow: 0 8px 24px var(--cc-shadow, rgba(0,0,0,.4)); min-width: 200px; }
       .menu button { display: flex; justify-content: space-between; width: 100%; background: none; border: 0; padding: 5px 8px; border-radius: 5px; text-align: left; }
       .menu button:hover { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
       .menu .h { padding: 3px 8px; color: var(--cc-fg-subtle); font-size: 11px; }

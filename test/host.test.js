@@ -320,3 +320,26 @@ test('a provider that gains a feature while it stays listed is seen on the next 
   assert.equal(ctx.lastState().chips[0].problem, undefined)
   inbox.dispose()
 })
+
+test('Mark unread on a read row: the source marks it, the row leaves Read for the list; only where offered', async () => {
+  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false })], markUnread: true })
+  const mail = fakeFeed(MAIL, [], { recent: [item('m9', { unread: false })] })
+  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail } })
+  await inbox.first
+  const read = (id) => ctx.lastState().read.find((r) => r.id === id)
+  assert.equal(read('r1').canUnread, true)
+  assert.equal(read('m9').canUnread, false)
+  await inbox.act({ type: 'markUnread', key: read('m9').key })
+  assert.equal(mail.calls.some((c) => c[0] === 'markUnread'), false)
+  await inbox.act({ type: 'markUnread', key: read('r1').key })
+  assert.deepEqual(chat.calls.filter((c) => c[0] === 'markUnread'), [['markUnread', 'r1']])
+  assert.deepEqual(ids(ctx).sort(), ['c1', 'r1'])
+  assert.equal(read('r1'), undefined)
+  // A refusal reaches the panel as a notice.
+  chat.recent = [item('r2', { unread: false })]
+  await inbox.tick()
+  chat.throwOn = 'markUnread'
+  await ctx.sendPanel({ type: 'markUnread', key: read('r2').key })
+  assert.match(ctx.posts.at(-1).text, /Mark unread failed: chat: Google refused/)
+  inbox.dispose()
+})

@@ -101,15 +101,16 @@ function rowEl(r) {
   )
   const acts = el('span', { class: 'acts' })
   if (r.read) {
-    // Read already: it only opens (a click on the row), to look at it again or discuss it.
+    // Read already: a click opens it again; Mark unread where the source offers it (`markUnread`).
+    if (r.canUnread) acts.append(button('Mark unread', () => post('markUnread', { key: r.key }), `Mark it unread in ${r.label}: it goes back to the list`))
   } else if (m.calendar) {
     if (m.join) acts.append(button('Join', () => post('join', { eventId: r.id }), 'Join the meeting', 'primary'))
   } else {
     const chip = (state.chips || []).find((c) => c.pluginId === r.pluginId)
     const reads = state.settings && state.settings.doneMarksRead && (state.providers || []).some((p) => p.pluginId === r.pluginId && p.markRead)
     acts.append(
-      button('✓', () => done(r.key), `Done (e): hidden until it changes${reads ? `; also marked read in ${chip ? chip.label : 'its source'}` : ''}`),
-      button('⏱', () => { ui.menu = ui.menu === r.key ? null : r.key; render() }, 'Snooze (s)')
+      button('Done', () => done(r.key), `Done (e): hidden until it changes${reads ? `; also marked read in ${chip ? chip.label : 'its source'}` : ''}`),
+      button('Snooze ▾', () => { ui.menu = ui.menu === r.key ? null : r.key; render() }, 'Snooze (s)')
     )
   }
   li.append(acts)
