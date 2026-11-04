@@ -20,24 +20,22 @@ function renderSettings(state, { post, close }) {
   const rows = sourceRows(s, state.providers)
   const fields = {}
   const num = (value, extra) => h('input', { type: 'text', inputmode: 'numeric', value: value ?? '', ...extra })
-  const check = (on) => h('input', { type: 'checkbox', checked: on })
+  const check = (on) => h('input', { type: 'checkbox', class: 'toggle', role: 'switch', checked: on })
   const select = (opts, value) => {
     const n = h('select', {}, ...opts.map(([v, t]) => h('option', { value: v, text: t, selected: v === value })))
     n.value = value
     return n
   }
-  const label = (text, small) => h('label', {}, text, small ? h('small', { text: small }) : null)
+  const label = (text, small) => h('div', { class: 'lbl' }, text, small ? h('small', { text: small }) : null)
 
-  const srcTable = h('table', { class: 'src' }, h('tr', {}, ...['Source', 'Items', 'Weight', 'On'].map((t) => h('th', { text: t }))))
+  const srcTable = h('div', { class: 'card srcgrid' }, h('div', { class: 'field head' }, ...['Source', 'Items', 'Weight', 'On'].map((t) => h('span', { text: t }))))
   const src = {}
   for (const r of rows) {
-    const name = h('span', { class: `c-${r.color}`, text: r.label })
-    name.style.color = 'var(--src)'
-    name.style.fontWeight = '600'
+    const name = h('span', { class: `name c-${r.color}`, title: r.pluginId }, h('b', { text: r.label }), r.note ? h('small', { class: 'muted', text: ` · ${r.note}` }) : null)
     const f = { items: num(r.items), weight: num(r.weight, { placeholder: r.weightDefault === undefined ? '' : String(r.weightDefault) }), on: check(r.on) }
     if (r.live) src[r.pluginId] = f
     else for (const i of Object.values(f)) i.disabled = true
-    srcTable.append(h('tr', { class: r.live ? '' : 'gone' }, h('td', {}, name, r.note ? h('small', { class: 'muted', text: ` ${r.note}` }) : null), h('td', {}, f.items), h('td', {}, f.weight), h('td', {}, f.on)))
+    srcTable.append(h('div', { class: r.live ? 'field' : 'field gone' }, name, f.items, f.weight, f.on))
   }
   fields.sources = src
 
@@ -63,7 +61,12 @@ function renderSettings(state, { post, close }) {
     close()
   }
 
-  const rules = (...kids) => h('div', { class: 'rules' }, ...kids)
+  // A card of rows from [label, control] pairs: the label left, the control right-aligned.
+  const rules = (...kids) => {
+    const card = h('div', { class: 'card' })
+    for (let i = 0; i < kids.length; i += 2) card.append(h('div', { class: 'field' }, kids[i], h('div', { class: 'ctl' }, kids[i + 1])))
+    return card
+  }
   return h('div', { class: 'set' },
     h('button', { type: 'button', class: 'back', text: '← Inbox', onclick: close }),
     h('h3', { text: 'Sources' }),
@@ -83,7 +86,7 @@ function renderSettings(state, { post, close }) {
       label('Notify when a snooze ends'), notify,
       label('"This afternoon" means'), aft, label('"Tomorrow" means'), mor),
     h('h3', { text: 'Read' }),
-    rules(label('Read messages listed', "1 to 50, newest first, from all sources together; each source can only give what its own panel keeps (Chat: its Recent setting, Gmail: its Read lane)"), readItems),
+    rules(label('Read messages listed', '1 to 50; a source gives at most what its own panel keeps'), readItems),
     h('h3', { text: 'Calendar' }),
     rules(
       label('Position'), pos, label('Upcoming events listed'), upcoming,
