@@ -123,7 +123,8 @@ function rowEl(r) {
 
 function offList() {
   const today = state.today || []
-  if (!today.length) return el('div', { class: 'empty', text: 'Nothing done or snoozed today.' })
+  const back = () => button('← Back to the list', () => { ui.filter = 'all'; render() }, 'Show the inbox again', 'link')
+  if (!today.length) return el('div', { class: 'empty' }, el('div', { text: 'Nothing done or snoozed today.' }), back())
   const ul = el('ul', { class: 'list' })
   for (const e of today) {
     const m = offModel(e, Date.now())
@@ -164,7 +165,7 @@ function chipsEl() {
   for (const c of chipsModel(state)) {
     const cls = ['chip', ui.filter === c.filter && 'on', c.done && 'done', c.problem && 'problem', c.color && colorClass(c.color)].filter(Boolean).join(' ')
     box.append(
-      el('button', { type: 'button', class: cls, onclick: () => { ui.filter = c.filter; ui.showAll = false; ui.menu = null; render() } },
+      el('button', { type: 'button', class: cls, onclick: () => { ui.filter = chipFilter(ui.filter, c.filter); ui.showAll = false; ui.menu = null; render() } },
         c.color ? el('i', {}) : null, c.label, el('span', { class: 'n', text: String(c.count) }))
     )
   }

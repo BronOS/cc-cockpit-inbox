@@ -179,6 +179,11 @@ function nextSelection(keysBefore, gone, keysAfter) {
   return keysAfter[Math.min(Math.max(0, at), keysAfter.length - 1)]
 }
 
+/** The filter after a chip click: a click on the chip already on goes back to All. */
+function chipFilter(current, clicked) {
+  return clicked !== 'all' && clicked === current ? 'all' : clicked
+}
+
 /**
  * Holds redraws while a mouse button is down. A click fires only when the press and the release land
  * on the same element, and a redraw replaces every element: the first click into an unfocused panel
@@ -211,5 +216,5 @@ function createRenderGate(draw, defer = (fn) => setTimeout(fn, 0)) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FYI_LIMIT, colorClass, ageText, clockText, filterRows, listModel, chipsModel, problemLines, rowModel, offModel, dayClock, snoozeChoices, calendarPlacement, keyAction, nextSelection, createRenderGate }
+  module.exports = { FYI_LIMIT, colorClass, ageText, clockText, filterRows, listModel, chipsModel, problemLines, rowModel, offModel, dayClock, snoozeChoices, calendarPlacement, keyAction, nextSelection, chipFilter, createRenderGate }
 }

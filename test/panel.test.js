@@ -190,3 +190,11 @@ test('redraws wait while a mouse button is down, then run once after the click',
   later.shift()()
   assert.equal(draws, 2, 'a press with no request draws nothing')
 })
+
+test('a click on the chip that is on goes back to All', () => {
+  assert.equal(R.chipFilter('all', 'off'), 'off')
+  assert.equal(R.chipFilter('off', 'off'), 'all')
+  assert.equal(R.chipFilter('p.chat', 'p.chat'), 'all')
+  assert.equal(R.chipFilter('off', 'p.chat'), 'p.chat')
+  assert.equal(R.chipFilter('all', 'all'), 'all')
+})
