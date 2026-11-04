@@ -125,6 +125,7 @@ function createInbox(ctx, opts = {}) {
         ([d, f]) => {
           s.desc = describeOf(d, s.pluginId)
           s.features = featuresOf(f)
+          s.describedAt = now()
         },
         (e) => {
           s.describing = null
@@ -141,17 +142,23 @@ function createInbox(ctx, opts = {}) {
     if (!s) return
     const gen = ++s.gen
     const current = () => sources.get(id) === s && s.gen === gen && !disposed
-    if (!s.desc) {
+    if (!s.desc || s.redescribe) {
+      s.redescribe = false
       try {
         await describeSource(s)
         if (sources.get(id) !== s) return
       } catch (e) {
         if (sources.get(id) !== s) return
+        // A source already described keeps its last description; only a first failure stops here.
+        if (s.desc) {
+          ctx.log.warn(`source ${id} describe: ${why(e)}`)
+        } else {
         // Shown anyway, under a name built from its id; describe is asked again next time.
         s.error = `${id}: ${why(e)}`
         s.stale = s.items.length > 0
         ctx.log.warn(`source ${id}: ${why(e)}`)
         return
+        }
       }
     }
     const conf = S.sourceOf(settings, id, s.desc.kind)
@@ -430,6 +437,16 @@ function createInbox(ctx, opts = {}) {
     ticking = (async () => {
       await reloadShared()
       const fresh = await sync()
+      // describe and features again on every full refresh: a provider plugin that reloads with new
+      // code (a feature such as `recent` added) stays in the provider list without leaving it, so
+      // onChange alone would keep its first answer. Both are host-local calls, nothing on the network.
+      // Not one described within the last refresh interval (the first refresh overlaps the join's).
+      const t0 = now()
+      for (const [id, s] of sources) {
+        if (fresh.has(id) || !s.describedAt || t0 - s.describedAt < REFRESH_S * 1000) continue
+        s.describing = null
+        s.redescribe = true
+      }
       await Promise.all([...[...sources.keys()].filter((id) => !fresh.has(id)).map((id) => refreshSource(id)), refreshCalendar()])
       if (disposed) return
       const t = now()

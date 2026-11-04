@@ -37,8 +37,9 @@ test('two providers, then a third joining: each is described once, all rows rank
   await settle()
   assert.deepEqual(ids(ctx), ['APP-1', 'c1', 'm1'])
   assert.deepEqual(ctx.lastState().chips.map((c) => [c.badge, c.count]), [['CHAT', 1], ['MAIL', 1], ['JIRA', 1]])
-  await inbox.tick()
+  // Once when it joins (a full refresh asks again: see "gains a feature" below).
   for (const f of [chat, mail, jira]) assert.equal(f.calls.filter((c) => c[0] === 'describe').length, 1)
+  await inbox.tick()
   // Items per source by kind: chat 10, mail 10, issues 8.
   assert.deepEqual(jira.calls.find((c) => c[0] === 'items')[1], { limit: 8 })
   inbox.dispose()
@@ -292,5 +293,25 @@ test('no source offers read messages: no Read chip', async () => {
   const { ctx, inbox } = setup({ feeds: { 'bronos.jira': fakeFeed(JIRA, [item('APP-1')], { markRead: false }) } })
   await inbox.first
   assert.equal(ctx.lastState().read, null)
+  inbox.dispose()
+})
+
+test('a provider that gains a feature while it stays listed is seen on the next full refresh', async () => {
+  const chat = fakeFeed(CHAT, [item('c1')])
+  const { ctx, clock, inbox } = setup({ feeds: { 'bronos.chat': chat } })
+  await inbox.first
+  assert.equal(ctx.lastState().read, null)
+  clock.t += 61000
+  // The plugin reloaded with `recent` (same plugin id, no onChange).
+  chat.impl.features = async () => ['markRead', 'recent']
+  chat.impl.recent = async () => ({ items: [item('r1', { unread: false })], asOf: NOW, state: 'ok' })
+  await inbox.tick()
+  assert.deepEqual(ctx.lastState().read.map((r) => r.id), ['r1'])
+  // A describe that fails later keeps the last description.
+  chat.impl.describe = async () => { throw new Error('busy') }
+  clock.t += 61000
+  await inbox.tick()
+  assert.equal(ctx.lastState().chips[0].label, 'Chat')
+  assert.equal(ctx.lastState().chips[0].problem, undefined)
   inbox.dispose()
 })
