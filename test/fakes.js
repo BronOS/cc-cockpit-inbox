@@ -23,6 +23,7 @@ function item(id, o = {}) {
     ...(o.mentionsMe !== undefined ? { mentionsMe: o.mentionsMe } : {}),
     ...(o.dueAt !== undefined ? { dueAt: o.dueAt } : {}),
     ...(o.jiraKey !== undefined ? { jiraKey: o.jiraKey } : {}),
+    ...(o.canUnread !== undefined ? { canUnread: o.canUnread } : {}),
   }
 }
 

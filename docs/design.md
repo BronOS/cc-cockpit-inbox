@@ -128,6 +128,8 @@ Methods (all async, plain data):
   2026-11-03): the newest READ messages from the provider's cache (Chat's Recent lane, Gmail's Read
   lane), newest first, `limit` 1..50. Inbox lists them under its Read chip, newest first and not
   ranked; a click runs `open(id)`, which must accept these ids too. They take no done or snooze.
+- `markUnread(id)` → `void` (optional, feature `markUnread`; Chat and Gmail): the plugin's own Mark
+  unread, offered on the Read rows. An item it cannot mark says `canUnread: false`.
 - Event `changed` `{}`: the provider's cache changed (a poll finished, the person acted in its panel).
 
 ```ts
@@ -145,6 +147,7 @@ interface FeedItem {
   mentionsMe?: boolean
   dueAt?: number        // issues: the due date
   jiraKey?: string      // mail and chat: the issue an item is about (Gmail and Chat already find it)
+  canUnread?: false     // recent items: this one cannot be marked unread (a Chat thread); absent = it can
 }
 ```
 

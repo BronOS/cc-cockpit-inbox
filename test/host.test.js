@@ -322,13 +322,17 @@ test('a provider that gains a feature while it stays listed is seen on the next 
 })
 
 test('Mark unread on a read row: the source marks it, the row leaves Read for the list; only where offered', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false })], markUnread: true })
+  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false }), item('t1', { unread: false, canUnread: false })], markUnread: true })
   const mail = fakeFeed(MAIL, [], { recent: [item('m9', { unread: false })] })
   const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail } })
   await inbox.first
   const read = (id) => ctx.lastState().read.find((r) => r.id === id)
   assert.equal(read('r1').canUnread, true)
   assert.equal(read('m9').canUnread, false)
+  // A thread Chat cannot mark: no button, and the action is refused without a call.
+  assert.equal(read('t1').canUnread, false)
+  await inbox.act({ type: 'markUnread', key: read('t1').key })
+  assert.equal(chat.calls.some((c) => c[0] === 'markUnread'), false)
   await inbox.act({ type: 'markUnread', key: read('m9').key })
   assert.equal(mail.calls.some((c) => c[0] === 'markUnread'), false)
   await inbox.act({ type: 'markUnread', key: read('r1').key })

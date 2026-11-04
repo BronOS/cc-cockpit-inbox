@@ -68,6 +68,9 @@ function itemOf(raw) {
   if (due !== null) out.dueAt = due
   const key = own(raw, 'jiraKey')
   if (typeof key === 'string' && JIRA_KEY.test(key)) out.jiraKey = key
+  // Only an explicit false is kept: absent means the item can be marked unread where the source
+  // offers markUnread (Chat says false for a thread, which its API cannot mark).
+  if (own(raw, 'canUnread') === false) out.canUnread = false
   return out
 }
 

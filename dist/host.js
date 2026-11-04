@@ -208,7 +208,7 @@ function createInbox(ctx, opts = {}) {
     for (const s of sources.values()) {
       if (!s.desc || !s.features.has('recent') || !S.sourceOf(settings, s.pluginId, s.desc.kind).on) continue
       for (const it of s.recent) {
-        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true, canUnread: s.features.has('markUnread') })
+        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true, canUnread: s.features.has('markUnread') && it.canUnread !== false })
       }
     }
     return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, settings.readItems)
@@ -531,7 +531,7 @@ function createInbox(ctx, opts = {}) {
         // `changed` follows; re-reading it here moves the row to the list at once.
         const read = readByKey(m.key)
         const s = read && sources.get(read.pluginId)
-        if (!s || !s.features.has('markUnread')) return
+        if (!s || !read.canUnread) return
         await call(s.handle.markUnread(read.id), `${read.pluginId} markUnread`)
         await refreshSource(read.pluginId)
         publish()

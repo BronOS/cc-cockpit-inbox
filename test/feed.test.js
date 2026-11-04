@@ -34,6 +34,11 @@ test('itemsOf: wrong types become safe values; a bad jiraKey is dropped; newline
   assert.equal(it.jiraKey, undefined)
 })
 
+test('itemsOf: canUnread is kept only as an explicit false', () => {
+  const its = itemsOf({ items: [{ id: 'a', title: 't', level: 'fyi', canUnread: false }, { id: 'b', title: 't', level: 'fyi', canUnread: 'no' }, { id: 'c', title: 't', level: 'fyi', canUnread: true }] }).items
+  assert.deepEqual(its.map((i) => i.canUnread), [false, undefined, undefined])
+})
+
 test('itemsOf: a malformed answer is a source error; an unknown state reads ok; signedOut kept with its message', () => {
   assert.equal(itemsOf('junk').state, 'error')
   assert.equal(itemsOf({ items: 'no' }).state, 'error')
