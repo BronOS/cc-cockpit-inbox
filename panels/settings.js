@@ -48,11 +48,12 @@ function renderSettings(state, { post, close }) {
   const aft = select(SELECTS.afternoon, s.afternoon), mor = select(SELECTS.morning, s.morning), badge = select(SELECTS.badge, s.badge)
   const pos = select(SELECTS.position, s.calendar.position), tl = select(SELECTS.timeline, s.calendar.timeline)
   const upcoming = num(s.calendar.upcoming), pin = num(s.calendar.pinMinutes)
+  const readItems = num(s.readItems)
 
   const collect = () => ({
     sources: Object.fromEntries(Object.entries(src).map(([id, f]) => [id, { on: f.on.checked, items: f.items.value, weight: f.weight.value }])),
     levels: { urgent: levels.urgent.value, action: levels.action.value, fyi: levels.fyi.value },
-    unread: unread.value, direct: direct.value, due: due.value, agePerHour: age.value,
+    unread: unread.value, direct: direct.value, due: due.value, agePerHour: age.value, readItems: readItems.value,
     dedupeJira: dedupe.checked, doneMarksRead: marks.checked, doneReturns: returns.checked, notifySnooze: notify.checked,
     afternoon: aft.value, morning: mor.value, badge: badge.value,
     calendar: { position: pos.value, upcoming: upcoming.value, pinMinutes: pin.value, timeline: tl.value },
@@ -81,6 +82,8 @@ function renderSettings(state, { post, close }) {
       label('A done item comes back when it changes', 'a new message, comment or status'), returns,
       label('Notify when a snooze ends'), notify,
       label('"This afternoon" means'), aft, label('"Tomorrow" means'), mor),
+    h('h3', { text: 'Read' }),
+    rules(label('Read messages listed', "1 to 50, newest first, from all sources together; each source can only give what its own panel keeps (Chat: its Recent setting, Gmail: its Read lane)"), readItems),
     h('h3', { text: 'Calendar' }),
     rules(
       label('Position'), pos, label('Upcoming events listed'), upcoming,

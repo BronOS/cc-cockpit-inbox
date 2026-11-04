@@ -269,7 +269,7 @@ test('no providers at all: an empty list, no chips, no badge, and the CLI says s
 })
 
 test('the Read chip: read messages of the sources that offer them, newest first; they open and never take done', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false, at: NOW - 3 * HOUR }), item('r2', { unread: false, at: NOW - HOUR }), item('sneaky', { unread: true })] })
+  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r2', { unread: false, at: NOW - HOUR }), item('r1', { unread: false, at: NOW - 3 * HOUR }), item('sneaky', { unread: true })] })
   const jira = fakeFeed(JIRA, [item('APP-1')], { markRead: false })
   const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.jira': jira } })
   await inbox.first
@@ -277,6 +277,11 @@ test('the Read chip: read messages of the sources that offer them, newest first;
   assert.deepEqual(st.read.map((r) => r.id), ['r2', 'r1'], 'unread rows from recent are left out')
   assert.equal(st.read[0].read, true)
   assert.deepEqual(chat.calls.find((c) => c[0] === 'recent')[1], { limit: 20 })
+  // The setting: asked of each source and the cap of the merged list.
+  await inbox.act({ type: 'saveSettings', settings: { readItems: 1 } })
+  assert.deepEqual(chat.calls.filter((c) => c[0] === 'recent').at(-1)[1], { limit: 1 })
+  assert.deepEqual(ctx.lastState().read.map((r) => r.id), ['r2'])
+  await inbox.act({ type: 'saveSettings', settings: { readItems: 20 } })
   await inbox.act({ type: 'open', key: st.read[0].key })
   assert.deepEqual(chat.calls.filter((c) => c[0] === 'open'), [['open', 'r2']])
   await inbox.act({ type: 'done', key: st.read[0].key })

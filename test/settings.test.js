@@ -49,3 +49,9 @@ test("a removed provider's settings are kept; rules carry only set weights", asy
   assert.equal(S.sourceOf(s, 'bronos.mail', 'mail').weight, 60)
   assert.equal(S.sourceOf(s, 'bronos.mail', 'mail').weightSet, true)
 })
+
+test('readItems: 20 by default, 1 to 50', () => {
+  assert.equal(S.readSettings(undefined).readItems, 20)
+  assert.equal(S.readSettings({ readItems: 35 }).readItems, 35)
+  for (const bad of [0, 51, 2.5, '30']) assert.equal(S.readSettings({ readItems: bad }).readItems, 20)
+})

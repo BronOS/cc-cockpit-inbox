@@ -37,6 +37,8 @@ const DEFAULTS = Object.freeze({
   afternoon: '14:00',
   morning: '09:00',
   notifySnooze: true,
+  // The Read chip: how many read messages to ask each source for, and to list in all.
+  readItems: 20,
   badge: 'urgent',
   calendar: Object.freeze({ position: 'top', upcoming: 3, pinMinutes: 30, timeline: 'auto' }),
 })
@@ -87,6 +89,7 @@ function readSettings(raw) {
     afternoon: oneOf(own(raw, 'afternoon'), AFTERNOONS, D.afternoon),
     morning: oneOf(own(raw, 'morning'), MORNINGS, D.morning),
     notifySnooze: bool(own(raw, 'notifySnooze'), D.notifySnooze),
+    readItems: int(own(raw, 'readItems'), 1, 50, D.readItems),
     badge: oneOf(own(raw, 'badge'), BADGES, D.badge),
     calendar: {
       position: oneOf(own(cal, 'position'), POSITIONS, D.calendar.position),

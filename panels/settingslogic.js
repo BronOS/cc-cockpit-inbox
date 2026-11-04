@@ -63,7 +63,7 @@ function formToSettings(settings, providers, form) {
     out.sources[p.pluginId] = row
   }
   for (const k of ['urgent', 'action', 'fyi']) out.levels[k] = num((form.levels || {})[k], out.levels[k])
-  for (const k of ['unread', 'direct', 'due', 'agePerHour']) out[k] = num(form[k], out[k])
+  for (const k of ['unread', 'direct', 'due', 'agePerHour', 'readItems']) out[k] = num(form[k], out[k])
   for (const k of ['dedupeJira', 'doneMarksRead', 'doneReturns', 'notifySnooze']) if (typeof form[k] === 'boolean') out[k] = form[k]
   for (const k of ['afternoon', 'morning', 'badge']) if (typeof form[k] === 'string') out[k] = form[k]
   const c = form.calendar || {}

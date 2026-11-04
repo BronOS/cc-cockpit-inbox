@@ -31,9 +31,6 @@ const CLI_WAIT_MS = 20000
 const DEBOUNCE_MS = 1000
 const REFRESH_S = 60
 const UNDO_MS = 6000
-// The Read chip: the newest read messages of every source with `recent` (feature), at most this many
-// from each and in all.
-const READ_LIMIT = 20
 // A snooze that ended while the app was closed is not announced when it opens: only one that ended
 // in the last 15 minutes, and at most 3 a refresh (the app caps notifications at 10 a minute).
 const NOTIFY_WITHIN_MS = 15 * 60000
@@ -194,7 +191,7 @@ function createInbox(ctx, opts = {}) {
    */
   async function refreshRecent(s, current) {
     try {
-      const ans = itemsOf(await call(s.handle.recent({ limit: READ_LIMIT }), `${s.pluginId} recent`))
+      const ans = itemsOf(await call(s.handle.recent({ limit: settings.readItems }), `${s.pluginId} recent`))
       if (!current()) return
       if (ans.state === 'ok' || ans.items.length > 0) s.recent = ans.items.filter((it) => !it.unread)
     } catch (e) {
@@ -211,7 +208,7 @@ function createInbox(ctx, opts = {}) {
         out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true })
       }
     }
-    return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, READ_LIMIT)
+    return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, settings.readItems)
   }
 
   function onFeedChanged(_data, pluginId) {
