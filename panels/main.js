@@ -12,6 +12,13 @@
 let state = null
 const ui = { filter: 'all', sel: null, menu: null, showAll: false, notice: null, view: 'list' }
 let noticeTimer = null
+// Redraws from a state message or a timer wait while a mouse button is down (rowlogic.js
+// createRenderGate: a redraw between press and release loses the click). Redraws a click itself
+// asks for call render() directly.
+const gate = createRenderGate(() => render())
+document.addEventListener('pointerdown', () => gate.down(), true)
+document.addEventListener('pointerup', () => gate.up(), true)
+document.addEventListener('pointercancel', () => gate.up(), true)
 
 const root = () => document.getElementById('root')
 const post = (type, extra) => ccPanel.post({ type, ...extra })
@@ -278,19 +285,21 @@ ccPanel.onMessage((m) => {
   if (!m || typeof m !== 'object') return
   if (m.type === 'state') {
     state = m
-    render()
+    // The settings form is not redrawn under the person's typing: it reads the new state when it
+    // opens again (Save and Cancel go back to the list, which draws then).
+    if (ui.view !== 'settings') gate.request()
   } else if (m.type === 'notice' && typeof m.text === 'string') {
     ui.notice = m.text
     clearTimeout(noticeTimer)
     noticeTimer = setTimeout(() => {
       ui.notice = null
-      render()
+      gate.request()
     }, 8000)
-    render()
+    gate.request()
   } else if (m.type === 'view' && (m.view === 'settings' || m.view === 'list')) {
     // The title bar's settings button: a second press goes back to the list.
     ui.view = ui.view === m.view ? 'list' : m.view
-    render()
+    gate.request()
   }
 })
 
@@ -300,14 +309,14 @@ document.addEventListener('visibilitychange', () => {
 })
 window.addEventListener('focus', () => post('visible'))
 window.addEventListener('resize', () => {
-  if (state && state.calendar && state.calendar.position === 'beside') render()
+  if (state && state.calendar && state.calendar.position === 'beside') gate.request()
 })
 // Ages, countdowns, the now marker; not while the menu is open or the focus is in a field.
 setInterval(() => {
-  if (state && ui.view === 'list' && !ui.menu) render()
+  if (state && ui.view === 'list' && !ui.menu) gate.request()
 }, 15000)
 setInterval(() => {
-  if (state && state.undo && Date.now() >= state.undo.until && root().querySelector('.toast')) render()
+  if (state && state.undo && Date.now() >= state.undo.until && root().querySelector('.toast')) gate.request()
 }, 1000)
 
 post('hello')

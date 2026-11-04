@@ -179,6 +179,37 @@ function nextSelection(keysBefore, gone, keysAfter) {
   return keysAfter[Math.min(Math.max(0, at), keysAfter.length - 1)]
 }
 
+/**
+ * Holds redraws while a mouse button is down. A click fires only when the press and the release land
+ * on the same element, and a redraw replaces every element: the first click into an unfocused panel
+ * focuses its window, the page posts `visible`, and the host's answer used to rebuild the list
+ * between press and release, so that click did nothing (the second one worked). `request()` draws at
+ * once when no button is down; else once, after the release and the click it makes (`defer` runs
+ * after the click's own handlers).
+ */
+function createRenderGate(draw, defer = (fn) => setTimeout(fn, 0)) {
+  let down = false
+  let pending = false
+  return {
+    down() {
+      down = true
+    },
+    up() {
+      defer(() => {
+        down = false
+        if (pending) {
+          pending = false
+          draw()
+        }
+      })
+    },
+    request() {
+      if (down) pending = true
+      else draw()
+    },
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FYI_LIMIT, colorClass, ageText, clockText, filterRows, listModel, chipsModel, problemLines, rowModel, offModel, dayClock, snoozeChoices, calendarPlacement, keyAction, nextSelection }
+  module.exports = { FYI_LIMIT, colorClass, ageText, clockText, filterRows, listModel, chipsModel, problemLines, rowModel, offModel, dayClock, snoozeChoices, calendarPlacement, keyAction, nextSelection, createRenderGate }
 }

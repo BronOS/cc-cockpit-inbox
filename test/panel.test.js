@@ -170,3 +170,23 @@ test('the block: next card with Join, upcoming without the next one, Accept on t
   assert.equal(empty.next, null)
   assert.equal(empty.cells.every((c) => c === 'free'), true)
 })
+
+test('redraws wait while a mouse button is down, then run once after the click', () => {
+  let draws = 0
+  const later = []
+  const g = R.createRenderGate(() => draws++, (fn) => later.push(fn))
+  g.request()
+  assert.equal(draws, 1)
+  g.down()
+  g.request()
+  g.request()
+  assert.equal(draws, 1, 'nothing replaced under the pointer')
+  g.up()
+  assert.equal(draws, 1, 'not before the click has run')
+  later.shift()()
+  assert.equal(draws, 2, 'one redraw for both requests')
+  g.down()
+  g.up()
+  later.shift()()
+  assert.equal(draws, 2, 'a press with no request draws nothing')
+})
