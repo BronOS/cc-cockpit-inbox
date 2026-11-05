@@ -1,50 +1,71 @@
 'use strict'
-// Inbox (bronos.inbox): one ranked list of every `inbox-feed` provider with today's calendar
-// (docs/design.md). The host reads the providers through ctx.services (never their storage), ranks
-// with lib/v1.js (until host v2), keeps done and snooze in app storage (lib/state.js) and posts one `state`
-// message to the panel; the panel only renders and asks.
+// Inbox (bronos.inbox) 0.2.0: one list of every `inbox-feed` v2 provider, placed by the person's rules
+// (docs/design-v2.md). The host wires the pieces and owns no logic of its own beyond that:
 //
-// Refresh: a provider's `changed` event re-reads that source (debounced, a provider that emits after
-// every poll of several lanes costs one read); every 60 s everything is re-read (sources, the
-// calendar, the state and settings another window may have written); a provider joining or leaving
-// (`onChange`) syncs the set. The panel posts `visible` when it comes into sight or its window gets
-// focus, and the state is re-read then, so a done in another window shows at once there.
+//   sources (lib/sources.js: snapshot, item / gone / sync events)
+//     → rules (lib/rules.js, Jev answers from lib/jev.js) → groups → one `state` message to the panel
+//   Done and snooze (lib/state.js), search (lib/search.js), settings (lib/settings.js), `ccc inbox` (lib/cli.js)
 //
-// Every provider is another plugin: each call has a time limit, one source that throws or hangs
-// never holds the others, its last good items stay (marked stale, with its error line), and what it
-// answers goes through lib/feed.js before anything else sees it. Actions from the panel name a row
-// by its key; the host looks the row up in its own last ranking and never takes an id, a rev or a
-// URL from the page as it is.
+// Placement: an item keeps its placement until something about it changes, so the list does not move
+// under the person's hand. Rules re-run for one item when its source sends a new copy of it (`item`, or
+// a `sync` that replaces the set) and when its Jev answer comes in (`onAnswer`: an answer, the
+// 10-minute retry of an unavailable one, a `jev` provider appearing). Every item is placed again only
+// when the rules change or a source joins or leaves, and that full placement runs inside `jev.sweep`
+// so Jev requests still queued for items gone or questions edited are dropped, never asked.
+//
+// Done is Inbox's own memory and never calls the source (design-v2 "Inbox's own memory"): marking read
+// is the source's action, offered beside it. Every other action, `open` included, goes back to the
+// source as `act(id, action)` on the `useAll` handle of the item's own plugin; the host checks the
+// action is one the item lists and shows the source's `message` when it refuses.
+//
+// Actions from the panel and the overlay toolbar name an item by its key (`pluginId \0 id`); the host
+// looks it up in what the sources gave and never takes an id, a rev or an action list from a page.
 
-const { describeOf, itemsOf, featuresOf, calDayOf, calUpcomingOf, httpsUrl } = require('./lib/feed')
-const { rank, DEFAULT_RULES } = require('./lib/v1')
+const { actReplyOf } = require('./lib/feed')
+const { createSources } = require('./lib/sources')
+const { createJev } = require('./lib/jev')
 const { createState, untilOf } = require('./lib/state')
-const S = require('./lib/v1')
+const { placeItem, keyOf, byTime, REST } = require('./lib/rules')
+const { search } = require('./lib/search')
+const S = require('./lib/settings')
 const CLI = require('./lib/cli')
 
 const PANEL = 'main'
 const FEED = 'inbox-feed'
-const CALENDAR = 'calendar'
+const ITEM_TYPE = 'inbox-item'
+const DONE_BUTTON = 'inbox-done'
 const CALL_MS = 10000
-// How long `ccc inbox` waits for the first refresh (the plugin command limit is 30 s).
+// How long `ccc inbox` waits for the first read (the plugin command limit is 30 s).
 const CLI_WAIT_MS = 20000
-const DEBOUNCE_MS = 1000
 const REFRESH_S = 60
 const UNDO_MS = 6000
+// Jev answers of other windows are read this often (every answer is its own key: a full read is one
+// call per cached answer, so not every minute like the Done entries). A missed one costs a duplicate
+// request, never a different order.
+const JEV_LOAD_MS = 10 * 60000
+const AGENDA_HEIGHT = 140
+// The panel message stays well under the 1 MiB post limit with 1000 items per source: rows per
+// group, Done entries and search results are capped (the counts go with them), previews cut.
+const ROWS_SHOWN = 200
+const PREVIEW_SHOWN = 200
+const MAX_QUERY = 200
 // A snooze that ended while the app was closed is not announced when it opens: only one that ended
 // in the last 15 minutes, and at most 3 a refresh (the app caps notifications at 10 a minute).
 const NOTIFY_WITHIN_MS = 15 * 60000
 const NOTIFY_MAX = 3
-const ANSWERS = new Set(['accepted', 'tentative', 'declined'])
 const SNOOZES = new Set(['1h', 'afternoon', 'tomorrow', 'changes'])
-const OLD_APP = 'Inbox needs cc-cockpit 0.9.7 or newer (ctx.services.useAll). Update the app.'
+// v1's default times (v1 had a setting for them; v2's settings hold groups, rules and the agenda only).
+const SNOOZE_TIMES = { afternoon: '14:00', morning: '09:00' }
+const OLD_APP = 'Inbox 0.2.0 needs cc-cockpit 0.10.0 or newer (slots, overlay buttons and the services collector). Update the app.'
 
 // What a failed panel action is called in its notice: the button's words, not the message type.
-const ACTION_NAMES = { open: 'Open', done: 'Done', snooze: 'Snooze', undo: 'Undo', restore: 'Back to inbox', markUnread: 'Mark unread', join: 'Join', respond: 'Accept', calOpen: 'Open the event', saveSettings: 'Saving the settings', refresh: 'Refresh' }
+const ACTION_NAMES = { open: 'Open', done: 'Done', snooze: 'Snooze', undo: 'Undo', restore: 'Back to Inbox', refresh: 'Refresh', act: 'That action' }
 
 const why = (e) => String((e && e.message) || e || 'failed').slice(0, 300)
+const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+const cut = (s, max) => (typeof s === 'string' && s.length > max ? `${s.slice(0, max - 1)}…` : s)
 
-/** `p`, or a rejection after `ms` (a provider that never answers must not hold the refresh). */
+/** `p`, or a rejection after `ms` (a provider that never answers must not hold an action). */
 function withTimeout(p, ms, what) {
   let t
   return Promise.race([
@@ -55,317 +76,257 @@ function withTimeout(p, ms, what) {
   ])
 }
 
+/** Does this app have what Inbox 0.2.0 builds on (0.10.0: the collector, slots, overlay type buttons)? */
+function appIsNew(ctx) {
+  return (
+    typeof (ctx.services && ctx.services.useAll) === 'function' &&
+    typeof ctx.slots === 'object' &&
+    ctx.slots !== null &&
+    typeof (ctx.overlay && ctx.overlay.buttons) === 'function'
+  )
+}
+
 /**
- * The Inbox host. `opts` exists for tests: `now` (clock), `callMs` (per-call limit), `debounceMs`
- * (the `changed` debounce), `timers` ({ setTimeout, clearTimeout } for the debounce).
+ * The Inbox host. `opts` exists for tests: `now` (clock), `callMs` (per-call limit of the sources and
+ * of `act`), `jevTimers` (`{ set, clear }` for lib/jev.js), `cliWaitMs`.
  */
 function createInbox(ctx, opts = {}) {
   const now = opts.now || Date.now
   const callMs = opts.callMs ?? CALL_MS
-  const debounceMs = opts.debounceMs ?? DEBOUNCE_MS
-  const timers = opts.timers || { setTimeout, clearTimeout }
   const disposers = []
-
-  if (typeof ctx.services.useAll !== 'function') {
-    // The manifest's `services.collects` keeps Inbox off an older app; this is the belt to that.
-    ctx.log.warn(OLD_APP)
-    disposers.push(ctx.panels.onMessage(PANEL, () => ctx.panels.post(PANEL, { type: 'state', fatal: OLD_APP })))
-    return { tick: async () => {}, act: async () => {}, dispose: () => disposers.forEach((d) => d()) }
-  }
-
-  const feeds = ctx.services.useAll(FEED)
-  const state = createState(ctx.appStorage)
-  let settings = S.readSettings(undefined)
-  /** pluginId -> { pluginId, handle, desc, features, items, asOf, state, message, error, stale, gen, timer, loaded } */
-  const sources = new Map()
-  const cal = { handle: null, unsub: null, day: null, upcoming: [], error: null, timer: null, gen: 0 }
-  let ranked = { rows: [], hiddenByDedupe: 0 }
-  let lastRead = []
-  let lastUndo = null
-  let lastBadge
-  let updatedAt = null
   let disposed = false
-  let ticking = null
+
+  if (!appIsNew(ctx)) {
+    // An older app may still load Inbox (it ignores manifest keys it does not know): say what to do.
+    ctx.log.warn(OLD_APP)
+    const fatal = () => ctx.panels.post(PANEL, { type: 'state', version: 2, fatal: OLD_APP })
+    disposers.push(ctx.panels.onMessage(PANEL, fatal))
+    try {
+      fatal()
+    } catch {}
+    const nothing = async () => {}
+    return { first: Promise.resolve(), tick: nothing, refresh: nothing, act: nothing, saveSettings: nothing, dispose: () => disposers.forEach((d) => typeof d === 'function' && d()) }
+  }
 
   const call = (p, what) => withTimeout(p, callMs, what)
+  const state = createState(ctx.appStorage)
+  let settings = S.defaults()
+  let settingsJson = JSON.stringify(settings)
 
-  // ---- sources ----
+  /** key → `{ item, placement }` of every visible item; an entry stays while its item object does. */
+  const placed = new Map()
+  /** Keys to place again on the next build (Jev answers). */
+  const dirty = new Set()
+  /** Place every item on the next build (start, rules change, a source joining or leaving). */
+  let needFull = true
+  let sourceIds = null
+  /** The last build: groups of rows, every live item by key, the sources' views and descriptions. */
+  let view = { groups: [], live: new Map(), list: [], descs: new Map() }
+  let started = false
+  let updatedAt = null
+  let lastUndo = null
+  let lastBadge
+  let lastHeader = ''
+  let lastAgenda
+  let query = ''
+  let jevLoadedAt = -Infinity
+  let publishQueued = false
+  let ticking = null
 
-  function newSource(p) {
-    return { pluginId: p.pluginId, handle: p.handle, desc: null, features: new Set(), items: [], asOf: null, state: 'ok', message: null, error: null, stale: false, gen: 0, timer: null, loaded: false, describing: null, recent: [] }
-  }
+  const sources = createSources(ctx.services.useAll(FEED), {
+    log: ctx.log,
+    callMs,
+    onChange: () => {
+      updatedAt = now()
+      schedulePublish()
+    },
+  })
+  const jev = createJev({
+    store: ctx.appStorage,
+    services: ctx.services,
+    now,
+    timers: opts.jevTimers,
+    log: ctx.log,
+    onAnswer: (refs) => {
+      for (const r of refs) dirty.add(keyOf(r.pluginId, r.id))
+      schedulePublish()
+    },
+  })
 
-  /** Bring `sources` in line with the providers now; resolves once the new ones were read. */
-  async function sync() {
-    const list = feeds.providers()
-    const ids = new Set(list.map((p) => p.pluginId))
-    for (const [id, s] of sources) {
-      if (ids.has(id)) continue
-      if (s.timer) timers.clearTimeout(s.timer)
-      sources.delete(id)
-    }
-    const joined = []
-    for (const p of list) {
-      if (sources.has(p.pluginId)) continue
-      sources.set(p.pluginId, newSource(p))
-      joined.push(p.pluginId)
-    }
-    await Promise.all(joined.map((id) => refreshSource(id)))
-    return new Set(joined)
-  }
-
-  /**
-   * describe and features, once per provider instance. One promise per source: an onChange sync and
-   * a refresh that start together share it instead of asking twice. A failure clears it (asked again
-   * on the next read).
-   */
-  function describeSource(s) {
-    if (!s.describing) {
-      s.describing = Promise.all([call(s.handle.describe(), `${s.pluginId} describe`), call(s.handle.features(), `${s.pluginId} features`).catch(() => [])]).then(
-        ([d, f]) => {
-          s.desc = describeOf(d, s.pluginId)
-          s.features = featuresOf(f)
-          s.describedAt = now()
-        },
-        (e) => {
-          s.describing = null
-          throw e
-        }
-      )
-    }
-    return s.describing
-  }
-
-  /** Read one source (describe and features once per provider instance, then items). Never throws. */
-  async function refreshSource(id) {
-    const s = sources.get(id)
-    if (!s) return
-    const gen = ++s.gen
-    const current = () => sources.get(id) === s && s.gen === gen && !disposed
-    if (!s.desc || s.redescribe) {
-      s.redescribe = false
-      try {
-        await describeSource(s)
-        if (sources.get(id) !== s) return
-      } catch (e) {
-        if (sources.get(id) !== s) return
-        // A source already described keeps its last description; only a first failure stops here.
-        if (s.desc) {
-          ctx.log.warn(`source ${id} describe: ${why(e)}`)
-        } else {
-        // Shown anyway, under a name built from its id; describe is asked again next time.
-        s.error = `${id}: ${why(e)}`
-        s.stale = s.items.length > 0
-        ctx.log.warn(`source ${id}: ${why(e)}`)
-        return
-        }
-      }
-    }
-    const conf = S.sourceOf(settings, id, s.desc.kind)
-    if (!conf.on) return
-    try {
-      const ans = itemsOf(await call(s.handle.items({ limit: conf.items }), `${id}`))
-      if (!current()) return
-      s.loaded = true
-      s.error = null
-      s.state = ans.state
-      s.message = ans.message || null
-      if (ans.state === 'ok' || ans.items.length > 0) {
-        s.items = ans.items
-        s.asOf = ans.asOf
-        s.stale = false
-      } else {
-        // An error with nothing in it: keep what the source gave last.
-        s.stale = s.items.length > 0
-      }
-    } catch (e) {
-      if (!current()) return
-      s.error = `${s.desc.label}: ${why(e)}`
-      s.stale = s.items.length > 0
-      ctx.log.warn(`source ${id}: ${why(e)}`)
-    }
-    if (s.features.has('recent')) await refreshRecent(s, current)
-  }
+  // ---- placement ----
 
   /**
-   * The source's read messages for the Read chip (`recent`, optional in feed v1). Only read rows are
-   * kept (a provider that sends unread ones there would list them twice); a failure keeps the last
-   * answer and only logs: the main list's error line is about `items`.
+   * Bring `view` in line with the sources, the Done memory and the rules. Visible items keep their
+   * placement unless their object changed (a new copy from the source) or they are dirty; a full
+   * placement drops them all and runs inside `jev.sweep`.
    */
-  async function refreshRecent(s, current) {
-    try {
-      const ans = itemsOf(await call(s.handle.recent({ limit: settings.readItems }), `${s.pluginId} recent`))
-      if (!current()) return
-      if (ans.state === 'ok' || ans.items.length > 0) s.recent = ans.items.filter((it) => !it.unread)
-    } catch (e) {
-      if (current()) ctx.log.warn(`source ${s.pluginId} recent: ${why(e)}`)
+  function build(t) {
+    const list = sources.list()
+    const descs = new Map(list.map((s) => [s.pluginId, s.desc]))
+    const ids = list.map((s) => s.pluginId).sort().join('\u0000')
+    if (ids !== sourceIds) {
+      sourceIds = ids
+      needFull = true
     }
-  }
-
-  /** The Read chip's rows: every on source's read messages, newest first, as list rows. */
-  function readRows() {
-    const out = []
-    for (const s of sources.values()) {
-      if (!s.desc || !s.features.has('recent') || !S.sourceOf(settings, s.pluginId, s.desc.kind).on) continue
-      for (const it of s.recent) {
-        out.push({ key: `${s.pluginId}\u0000${it.id}`, pluginId: s.pluginId, id: it.id, rev: it.rev, badge: s.desc.badge, color: s.desc.color, label: s.desc.label, kind: s.desc.kind, title: it.title, from: it.from, where: it.where, at: it.at, level: it.level, unread: false, read: true, canUnread: s.features.has('markUnread') && it.canUnread !== false })
+    const live = new Map()
+    for (const s of list) for (const it of s.items) live.set(keyOf(s.pluginId, it.id), it)
+    const o = { now: t, kindOf: (id) => (descs.get(id) || {}).kind, jevAnswer: jev.answer }
+    const full = needFull
+    const run = () => {
+      if (full) placed.clear()
+      for (const k of dirty) placed.delete(k)
+      const visible = []
+      for (const [key, item] of live) {
+        const st = state.status(item, t)
+        if (st.hidden) {
+          // Placed again when it comes back (a woken snooze, an undo): the rules decide where.
+          placed.delete(key)
+          continue
+        }
+        let p = placed.get(key)
+        if (!p || p.item !== item) {
+          p = { item, placement: placeItem(settings, item, o) }
+          placed.set(key, p)
+        }
+        visible.push({ key, item, placement: p.placement, back: st.back })
       }
+      for (const key of [...placed.keys()]) if (!live.has(key)) placed.delete(key)
+      return visible
     }
-    return out.sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity)).slice(0, settings.readItems)
+    const visible = full ? jev.sweep(run) : run()
+    needFull = false
+    dirty.clear()
+    const groups = settings.groups.map((g) => ({ ...g, rows: [] }))
+    if (!groups.some((g) => g.id === REST)) groups.push({ id: REST, name: 'Rest', collapsed: true, badge: false, rows: [] })
+    const at = new Map(groups.map((g) => [g.id, g]))
+    for (const r of visible) (at.get(r.placement.group) || at.get(REST)).rows.push(r)
+    for (const g of groups) g.rows.sort(byTime)
+    view = { groups, live, list, descs }
+    return view
   }
 
-  function onFeedChanged(_data, pluginId) {
-    if (disposed || typeof pluginId !== 'string') return
-    const s = sources.get(pluginId)
-    if (!s) {
-      // An event before the onChange that announces its provider: sync picks it up.
-      void sync().then(publish, (e) => ctx.log.warn(`sync: ${why(e)}`))
-      return
-    }
-    if (s.timer) timers.clearTimeout(s.timer)
-    s.timer = timers.setTimeout(() => {
-      s.timer = null
-      void refreshSource(pluginId).then(publish)
-    }, debounceMs)
-  }
+  const descOf = (pluginId) => view.descs.get(pluginId) || { label: pluginId, badge: 'FEED', color: 'grey', kind: 'other' }
 
-  // ---- calendar ----
-
-  async function refreshCalendar() {
-    const gen = ++cal.gen
-    if (settings.calendar.position === 'off' || !ctx.services.available(CALENDAR)) {
-      cal.day = null
-      cal.upcoming = []
-      cal.error = null
-      return
-    }
-    if (!cal.handle) {
-      cal.handle = ctx.services.use(CALENDAR)
-      cal.unsub = cal.handle.on('changed', onCalendarChanged)
-    }
-    try {
-      const [day, up] = await Promise.all([
-        call(cal.handle.day({}), 'calendar'),
-        call(cal.handle.upcoming({ count: Math.min(20, settings.calendar.upcoming + 1), days: 7 }), 'calendar'),
-      ])
-      if (gen !== cal.gen || disposed) return
-      cal.day = calDayOf(day)
-      cal.upcoming = calUpcomingOf(up)
-      cal.error = null
-    } catch (e) {
-      if (gen !== cal.gen || disposed) return
-      cal.error = `Calendar: ${why(e)}`
-      ctx.log.warn(`calendar: ${why(e)}`)
+  /** One row as the panel draws it: plain data, text only, the actions minus `open` (the row click). */
+  function rowOut(key, item, extra) {
+    const d = descOf(item.source)
+    const actions = item.actions || []
+    return {
+      key,
+      source: item.source,
+      id: item.id,
+      title: item.title,
+      ...(item.preview ? { preview: cut(item.preview, PREVIEW_SHOWN) } : {}),
+      time: item.time,
+      ...(item.from ? { from: item.from } : {}),
+      ...(item.to ? { to: item.to } : {}),
+      ...(item.place ? { place: item.place } : {}),
+      labels: item.labels || [],
+      read: item.read,
+      mentionsMe: item.mentionsMe === true,
+      actions: actions.filter((a) => a.id !== 'open'),
+      canOpen: actions.some((a) => a.id === 'open'),
+      badge: d.badge,
+      color: d.color,
+      label: d.label,
+      ...extra,
     }
   }
 
-  function onCalendarChanged() {
-    if (disposed) return
-    if (cal.timer) timers.clearTimeout(cal.timer)
-    cal.timer = timers.setTimeout(() => {
-      cal.timer = null
-      void refreshCalendar().then(publish)
-    }, debounceMs)
-  }
-
-  /** An event the host has, by id (Join and RSVP use only what the calendar answered). */
-  function eventById(id) {
-    if (typeof id !== 'string') return null
-    const all = [...((cal.day && cal.day.events) || []), ...cal.upcoming, ...(cal.day && cal.day.tomorrow.first ? [cal.day.tomorrow.first] : [])]
-    return all.find((e) => e.id === id) || null
-  }
-
-  // ---- the list ----
-
-  /** The sources that are on and described, cut to their item count, as rank.js takes them. */
-  function rankSources() {
-    const out = []
-    for (const s of sources.values()) {
-      if (!s.desc) continue
-      const conf = S.sourceOf(settings, s.pluginId, s.desc.kind)
-      if (!conf.on) continue
-      out.push({ pluginId: s.pluginId, ...s.desc, items: s.items.slice(0, conf.items) })
+  /** Search results grouped as the list is; Done and snoozed items marked, Done entries with no live item last. */
+  function searchOut(t) {
+    if (!query) return null
+    const hits = search(query, [...view.live.values()], state.doneList(view.live))
+    const groups = view.groups.map((g) => ({ id: g.id, name: g.name, rows: [] }))
+    const at = new Map(groups.map((g) => [g.id, g]))
+    const o = { now: t, kindOf: (id) => descOf(id).kind, jevAnswer: jev.cachedAnswer }
+    const done = []
+    for (const h of hits) {
+      const key = keyOf(h.pluginId, h.id)
+      if (!h.item) {
+        done.push({ key, source: h.pluginId, id: h.id, title: h.title, done: true })
+        continue
+      }
+      const p = placed.get(key)
+      // A hidden item has no placement (Jev is never asked for it): placed here from cached answers only.
+      const placement = p ? p.placement : placeItem(settings, h.item, o)
+      const hidden = state.status(h.item, t).hidden
+      ;(at.get(placement.group) || at.get(REST)).rows.push({ key, item: h.item, placement, done: h.done, snoozed: hidden && !h.done })
     }
-    return out
+    let shown = 0
+    for (const g of groups) {
+      g.rows.sort(byTime)
+      g.rows = g.rows.slice(0, Math.max(0, ROWS_SHOWN - shown)).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, done: r.done, snoozed: r.snoozed }))
+      shown += g.rows.length
+    }
+    return { query, count: hits.length, groups: groups.filter((g) => g.rows.length), done: done.slice(0, Math.max(0, ROWS_SHOWN - shown)) }
   }
 
-  function computeRows(t) {
-    const view = state.view(t, DEFAULT_RULES.snoozeBack, { doneReturns: settings.doneReturns })
-    const c = settings.calendar
-    const calArg = c.position === 'inline' && cal.day ? { position: 'inline', pinMinutes: c.pinMinutes, events: cal.day.events } : null
-    ranked = rank(rankSources(), S.rulesOf(settings), t, view, calArg)
-    return ranked
+  /** The panel's whole state: groups, source lines, Done view, search, undo. */
+  function snapshot(t) {
+    const groups = view.groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      collapsed: g.collapsed,
+      badge: g.badge,
+      count: g.rows.length,
+      unread: g.rows.filter((r) => r.item.read === false).length,
+      rows: g.rows.slice(0, ROWS_SHOWN).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, back: r.back })),
+    }))
+    const shownBy = new Map()
+    for (const g of view.groups) for (const r of g.rows) shownBy.set(r.item.source, (shownBy.get(r.item.source) || 0) + 1)
+    const doneAll = state.doneList(view.live)
+    return {
+      type: 'state',
+      version: 2,
+      now: t,
+      updatedAt,
+      groups,
+      sources: view.list.map((s) => ({
+        pluginId: s.pluginId,
+        label: s.desc.label,
+        badge: s.desc.badge,
+        color: s.desc.color,
+        kind: s.desc.kind,
+        ...(s.desc.scope ? { scope: s.desc.scope } : {}),
+        state: s.state,
+        message: s.message,
+        error: s.error,
+        stale: s.stale,
+        asOf: s.asOf,
+        loaded: s.loaded,
+        refused: s.refused,
+        overCap: s.overCap,
+        count: s.items.length,
+        shown: shownBy.get(s.pluginId) || 0,
+      })),
+      done: {
+        count: doneAll.length,
+        rows: doneAll.slice(0, ROWS_SHOWN).map((e) => {
+          const d = descOf(e.pluginId)
+          return { key: keyOf(e.pluginId, e.id), source: e.pluginId, id: e.id, title: e.title, at: e.at, live: e.live, badge: d.badge, color: d.color, label: d.label }
+        }),
+      },
+      search: searchOut(t),
+      undo: lastUndo && t < lastUndo.until ? { label: lastUndo.label, until: lastUndo.until } : null,
+      agenda: settings.agenda,
+    }
   }
 
-  function badgeOf(rows) {
-    const mode = settings.badge
-    if (mode === 'off') return null
-    const items = rows.filter((r) => !r.calendar)
-    const n = mode === 'urgent' ? items.filter((r) => r.level === 'urgent').length : mode === 'action' ? items.filter((r) => r.level === 'urgent' || r.level === 'action').length : items.length
+  /** The panel badge: unread items in the groups marked `badge` (`read: null`, no read state, does not count). */
+  function badgeOf() {
+    let n = 0
+    for (const g of view.groups) if (g.badge) for (const r of g.rows) if (r.item.read === false) n++
     return n > 0 ? n : null
   }
 
-  function snapshot(t) {
-    const { rows, hiddenByDedupe } = computeRows(t)
-    const counts = new Map()
-    for (const r of rows) if (r.pluginId) counts.set(r.pluginId, (counts.get(r.pluginId) || 0) + 1)
-    const chips = []
-    for (const s of sources.values()) {
-      const conf = s.desc ? S.sourceOf(settings, s.pluginId, s.desc.kind) : null
-      if (conf && !conf.on) continue
-      const d = s.desc || describeOf(null, s.pluginId)
-      const problem = s.error || (s.state !== 'ok' ? `${d.label}: ${s.message || (s.state === 'signedOut' ? 'signed out' : 'error')}` : null)
-      chips.push({
-        pluginId: s.pluginId,
-        label: d.label,
-        badge: d.badge,
-        color: d.color,
-        kind: d.kind,
-        count: counts.get(s.pluginId) || 0,
-        loaded: s.loaded,
-        stale: s.stale,
-        asOf: s.asOf,
-        ...(problem ? { problem } : {}),
-      })
-    }
-    lastRead = readRows()
-    const today = state.today(t).map((e) => ({ pluginId: e.pluginId, id: e.id, title: e.title || '', badge: e.badge || '', kind: e.kind, at: e.at, until: e.until ?? null }))
-    const c = settings.calendar
-    return {
-      type: 'state',
-      now: t,
-      updatedAt,
-      rows,
-      hiddenByDedupe,
-      chips,
-      today,
-      // null: no source offers read messages (no Read chip).
-      read: [...sources.values()].some((s) => s.features.has('recent')) ? lastRead : null,
-      undo: lastUndo && t < lastUndo.until ? { label: lastUndo.label, until: lastUndo.until } : null,
-      calendar:
-        c.position === 'off' || (!cal.day && !cal.error)
-          ? null
-          : { position: c.position, timeline: c.timeline, upcomingCount: c.upcoming, day: cal.day, upcoming: cal.upcoming, ...(cal.error ? { problem: cal.error } : {}) },
-      settings,
-      // The settings view lists every provider, on or off, with its kind's defaults.
-      providers: [...sources.values()].map((s) => {
-        const d = s.desc || describeOf(null, s.pluginId)
-        return { pluginId: s.pluginId, label: d.label, color: d.color, kind: d.kind, markRead: s.features.has('markRead'), ...S.sourceOf(settings, s.pluginId, d.kind) }
-      }),
-    }
-  }
-
-  /** The app's title bar of the panel: when the list was read, refresh and settings. Sent when it changes. */
-  let lastHeader = ''
+  /** The app's title bar of the panel: when a source last changed, and refresh (the app's gear opens the settings page). */
   function header() {
     if (typeof ctx.panels.header !== 'function') return
     const d = updatedAt ? new Date(updatedAt) : null
     const spec = {
       meta: d ? `updated ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : 'loading…',
-      actions: [
-        { id: 'refresh', icon: 'refresh', title: 'Refresh every source' },
-        { id: 'settings', icon: 'settings', title: 'Inbox settings' },
-      ],
+      actions: [{ id: 'refresh', icon: 'refresh', title: 'Refresh every source' }],
     }
     const json = JSON.stringify(spec)
     if (json === lastHeader) return
@@ -377,38 +338,97 @@ function createInbox(ctx, opts = {}) {
     }
   }
 
-  function publish() {
-    if (disposed) return
-    const t = now()
-    header()
-    const snap = snapshot(t)
+  /** The agenda slot from the setting; placed again only when the setting changes. Inbox never reads the calendar. */
+  function placeAgenda() {
+    if (typeof ctx.panels.slots !== 'function') return
+    const pos = settings.agenda
+    if (pos === lastAgenda) return
     try {
-      ctx.panels.post(PANEL, snap)
+      ctx.panels.slots(PANEL, pos === 'off' ? null : [{ type: 'agenda', position: pos, height: AGENDA_HEIGHT }])
+      lastAgenda = pos
+    } catch (e) {
+      ctx.log.warn(`agenda slot: ${why(e)}`)
+    }
+  }
+
+  function publish() {
+    if (disposed || !started) return
+    const t = now()
+    build(t)
+    header()
+    try {
+      ctx.panels.post(PANEL, snapshot(t))
     } catch (e) {
       ctx.log.error(`post: ${why(e)}`)
     }
-    const b = badgeOf(snap.rows)
+    const b = badgeOf()
     if (b !== lastBadge) {
       lastBadge = b
-      ctx.badge(PANEL, b)
+      try {
+        ctx.badge(PANEL, b)
+      } catch (e) {
+        ctx.log.warn(`badge: ${why(e)}`)
+      }
     }
   }
 
-  // ---- state upkeep ----
+  /** One publish for a burst of events and answers (each `item` of a burst would be one otherwise). */
+  function schedulePublish() {
+    if (publishQueued || disposed) return
+    publishQueued = true
+    queueMicrotask(() => {
+      publishQueued = false
+      publish()
+    })
+  }
 
-  /** Every item any source lists now, for "last seen" and the notification check. */
-  function listedItems() {
-    const out = []
-    for (const s of sources.values()) for (const it of s.items) out.push({ pluginId: s.pluginId, id: it.id })
-    return out
+  // ---- settings and shared state ----
+
+  /** Settings that differ from the current ones: every item placed again, the agenda moved. */
+  function applySettings(next) {
+    const json = JSON.stringify(next)
+    if (json === settingsJson) return
+    settings = next
+    settingsJson = json
+    needFull = true
+    placeAgenda()
+    schedulePublish()
+  }
+
+  /** Validate and store settings (the settings page), applied in this window at once. Resolves what was stored. */
+  async function saveSettings(raw) {
+    const s = await S.saveSettings(ctx.appStorage, raw)
+    applySettings(s)
+    return s
+  }
+
+  /** What other windows may have written: settings, Done and snooze, now and then the Jev answers. */
+  async function reloadShared() {
+    try {
+      applySettings(await S.loadSettings(ctx.appStorage))
+    } catch (e) {
+      ctx.log.warn(`settings: ${why(e)}`)
+    }
+    try {
+      await state.load()
+    } catch (e) {
+      ctx.log.warn(`state: ${why(e)}`)
+    }
+    if (now() - jevLoadedAt >= JEV_LOAD_MS) {
+      jevLoadedAt = now()
+      try {
+        await jev.load()
+      } catch (e) {
+        ctx.log.warn(`jev cache: ${why(e)}`)
+      }
+    }
   }
 
   async function announceWoken(t) {
-    const listed = new Set(listedItems().map((x) => `${x.pluginId}\u0000${x.id}`))
     let sent = 0
     for (const e of state.woken(t)) {
-      const fresh = t - e.until <= NOTIFY_WITHIN_MS && listed.has(`${e.pluginId}\u0000${e.id}`)
-      if (fresh && settings.notifySnooze && sent < NOTIFY_MAX) {
+      const fresh = t - e.until <= NOTIFY_WITHIN_MS && view.live.has(keyOf(e.pluginId, e.id))
+      if (fresh && sent < NOTIFY_MAX) {
         sent++
         // Not awaited: notify resolves when the notification is shown, and a refresh must not wait.
         ctx.notify(e.title || 'A snoozed item is back', { title: 'Inbox: snooze ended' }).catch((err) => ctx.log.warn(`notify: ${why(err)}`))
@@ -418,41 +438,19 @@ function createInbox(ctx, opts = {}) {
     }
   }
 
-  async function reloadShared() {
-    try {
-      settings = await S.loadSettings(ctx.appStorage)
-    } catch (e) {
-      ctx.log.warn(`settings: ${why(e)}`)
-    }
-    try {
-      await state.load()
-    } catch (e) {
-      ctx.log.warn(`state: ${why(e)}`)
-    }
-  }
-
-  /** The full refresh: shared state, the provider set, every source, the calendar, upkeep. */
+  /** Every minute: what other windows wrote, upkeep of the memory, woken snoozes. Sources push their own changes. */
   async function tick() {
     if (ticking) return ticking
     ticking = (async () => {
+      await first
       await reloadShared()
-      const fresh = await sync()
-      // describe and features again on every full refresh: a provider plugin that reloads with new
-      // code (a feature such as `recent` added) stays in the provider list without leaving it, so
-      // onChange alone would keep its first answer. Both are host-local calls, nothing on the network.
-      // Not one described within the last refresh interval (the first refresh overlaps the join's).
-      const t0 = now()
-      for (const [id, s] of sources) {
-        if (fresh.has(id) || !s.describedAt || t0 - s.describedAt < REFRESH_S * 1000) continue
-        s.describing = null
-        s.redescribe = true
-      }
-      await Promise.all([...[...sources.keys()].filter((id) => !fresh.has(id)).map((id) => refreshSource(id)), refreshCalendar()])
       if (disposed) return
       const t = now()
-      updatedAt = t
-      await state.touch(listedItems(), t).catch(() => {})
+      build(t)
+      const listed = [...view.live.values()].map((it) => ({ pluginId: it.source, id: it.id }))
+      await state.touch(listed, t).catch(() => {})
       await state.prune(t).catch((e) => ctx.log.warn(`prune: ${why(e)}`))
+      await jev.prune().catch((e) => ctx.log.warn(`jev prune: ${why(e)}`))
       await announceWoken(t)
       publish()
     })().finally(() => {
@@ -461,14 +459,66 @@ function createInbox(ctx, opts = {}) {
     return ticking
   }
 
-  // ---- actions from the panel ----
+  /** The header's refresh: every source's `snapshot()` again. */
+  async function refresh() {
+    await first
+    await Promise.all(sources.list().map((s) => sources.snapshot(s.pluginId)))
+    await reloadShared()
+    publish()
+  }
 
-  const rowByKey = (key) => (typeof key === 'string' ? ranked.rows.find((r) => r.key === key && !r.calendar) || null : null)
-  // Read rows open like any other, and never take done or snooze (they are done already).
-  const readByKey = (key) => (typeof key === 'string' ? lastRead.find((r) => r.key === key) || null : null)
+  // ---- actions ----
+
+  /** A live item by key (hidden or not), or null. */
+  const liveByKey = (key) => (typeof key === 'string' ? view.live.get(key) || null : null)
+  /** A live item not hidden by Done or snooze, or null. */
+  const visibleByKey = (key) => {
+    const it = liveByKey(key)
+    return it && !state.status(it, now()).hidden ? it : null
+  }
+  const memoryRow = (it) => ({ pluginId: it.source, id: it.id, title: it.title, badge: descOf(it.source).badge, rev: it.rev })
 
   function setUndo(token, label, t) {
     lastUndo = { token, label, until: t + UNDO_MS }
+  }
+
+  /** Done in Inbox's memory only: the source is never called. Resolves the item, or null when there is none to mark. */
+  async function markDone(key) {
+    const it = visibleByKey(key)
+    if (!it) return null
+    const t = now()
+    setUndo(await state.done(memoryRow(it), t), `Done: ${it.title}`, t)
+    publish()
+    return it
+  }
+
+  /**
+   * One of the item's actions at its source: `act(id, action)` on its own plugin's handle. Refused here
+   * when the item does not list the action (the source checks again). Resolves the source's reply with
+   * the action's label.
+   */
+  async function runAction(key, action) {
+    const it = liveByKey(key)
+    if (!it) return { ok: false, message: 'that item is no longer in the Inbox' }
+    const a = typeof action === 'string' ? (it.actions || []).find((x) => x.id === action) : null
+    if (!a) return { ok: false, message: action === 'open' ? 'this item cannot be opened' : 'this item has no such action now' }
+    const label = descOf(it.source).label
+    const handle = sources.handle(it.source)
+    if (!handle) return { ok: false, label: a.label, message: `${label} is no longer a source` }
+    // Opening a "back" item or a woken snooze ends that mark (it was seen); a hidden one (opened from
+    // the Done view or a search) stays done.
+    if (action === 'open' && !state.status(it, now()).hidden) await state.restore(it.source, it.id)
+    const reply = actReplyOf(await call(handle.act(it.id, action), `${label} ${action}`))
+    if (action === 'open') schedulePublish()
+    return { ...reply, label: a.label }
+  }
+
+  function notice(text) {
+    try {
+      ctx.panels.post(PANEL, { type: 'notice', text })
+    } catch {
+      // the panel went away
+    }
   }
 
   async function act(m) {
@@ -476,45 +526,28 @@ function createInbox(ctx, opts = {}) {
     switch (m.type) {
       case 'hello':
       case 'visible':
+        await first
         await reloadShared()
         publish()
         return
       case 'refresh':
-        await tick()
+        await refresh()
         return
-      case 'open': {
-        const read = rowByKey(m.key) ? null : readByKey(m.key)
-        if (read) {
-          const rs = sources.get(read.pluginId)
-          if (rs) await call(rs.handle.open(read.id), `${read.pluginId} open`)
-          return
-        }
-        const row = rowByKey(m.key)
-        const s = row && sources.get(row.pluginId)
-        if (!s) return
-        // Opening ends a "back" or a woken snooze (it was seen); it is not done (decision 8).
-        await state.restore(row.pluginId, row.id)
-        await call(s.handle.open(row.id), `${row.pluginId} open`)
-        publish()
+      case 'open':
+      case 'act': {
+        const action = m.type === 'open' ? 'open' : m.action
+        const reply = await runAction(m.key, action)
+        if (!reply.ok) notice(`${reply.label || ACTION_NAMES[m.type]} failed: ${reply.message || 'the source refused'}`)
         return
       }
-      case 'done': {
-        const row = rowByKey(m.key)
-        if (!row) return
-        setUndo(await state.done(row, t), `Done: ${row.title}`, t)
-        publish()
-        const s = sources.get(row.pluginId)
-        if (settings.doneMarksRead && s && s.features.has('markRead')) {
-          // The read mark is not undone by Undo: the item is back in Inbox, read at its source.
-          await call(s.handle.markRead(row.id), `${row.pluginId} markRead`).catch((e) => ctx.log.warn(`markRead ${row.pluginId}: ${why(e)}`))
-        }
+      case 'done':
+        await markDone(m.key)
         return
-      }
       case 'snooze': {
-        const row = rowByKey(m.key)
-        if (!row || !SNOOZES.has(m.choice)) return
-        const until = untilOf(m.choice, t, { afternoon: settings.afternoon, morning: settings.morning })
-        setUndo(await state.snooze(row, until, t), `Snoozed: ${row.title}`, t)
+        const it = visibleByKey(m.key)
+        if (!it || !SNOOZES.has(m.choice)) return
+        const until = untilOf(m.choice, t, SNOOZE_TIMES)
+        setUndo(await state.snooze(memoryRow(it), until, t), `Snoozed: ${it.title}`, t)
         publish()
         return
       }
@@ -526,64 +559,28 @@ function createInbox(ctx, opts = {}) {
         }
         publish()
         return
-      case 'markUnread': {
-        // A read row back to unread at its source (the Read chip's button). The source's own
-        // `changed` follows; re-reading it here moves the row to the list at once.
-        const read = readByKey(m.key)
-        const s = read && sources.get(read.pluginId)
-        if (!s || !read.canUnread) return
-        await call(s.handle.markUnread(read.id), `${read.pluginId} markUnread`)
-        await refreshSource(read.pluginId)
-        publish()
-        return
-      }
       case 'restore': {
-        if (typeof m.pluginId !== 'string' || typeof m.id !== 'string') return
-        await state.restore(m.pluginId, m.id)
+        // "Back to Inbox" in the Done view: the entry goes, the rules place the item again.
+        const e = typeof m.key === 'string' ? state.entries().get(m.key) : null
+        if (e) await state.restore(e.pluginId, e.id)
         publish()
         return
       }
-      case 'join': {
-        const ev = eventById(m.eventId)
-        const url = ev && httpsUrl(ev.meetUrl)
-        if (url) await ctx.openExternal(url)
-        return
-      }
-      case 'respond': {
-        const ev = eventById(m.eventId)
-        if (!ev || !ANSWERS.has(m.answer) || !cal.handle) return
-        await call(cal.handle.respond(ev.id, m.answer), 'calendar respond')
-        await refreshCalendar()
+      case 'search':
+        query = typeof m.query === 'string' ? m.query.trim().slice(0, MAX_QUERY) : ''
         publish()
         return
-      }
-      case 'calOpen': {
-        const ev = eventById(m.eventId)
-        if (ev && cal.handle) await call(cal.handle.open(ev.id), 'calendar open')
-        return
-      }
-      case 'saveSettings': {
-        settings = await S.saveSettings(ctx.appStorage, m.settings)
-        // Item counts or a source switched on change what to read.
-        await Promise.all([...[...sources.keys()].map((id) => refreshSource(id)), refreshCalendar()])
-        publish()
-        return
-      }
       default:
     }
   }
 
   async function onPanelMessage(m) {
-    if (typeof m !== 'object' || m === null || typeof m.type !== 'string') return
+    if (!isObj(m) || typeof m.type !== 'string') return
     try {
       await act(m)
     } catch (e) {
       ctx.log.warn(`${m.type}: ${why(e)}`)
-      try {
-        ctx.panels.post(PANEL, { type: 'notice', text: `${ACTION_NAMES[m.type] || 'That'} failed: ${why(e)}` })
-      } catch {
-        // the panel went away
-      }
+      notice(`${ACTION_NAMES[m.type] || 'That'} failed: ${why(e)}`)
     }
   }
 
@@ -591,45 +588,74 @@ function createInbox(ctx, opts = {}) {
   if (typeof ctx.panels.onAction === 'function') {
     disposers.push(
       ctx.panels.onAction(PANEL, (id) => {
-        if (id === 'refresh') void tick().catch((e) => ctx.log.warn(`refresh: ${why(e)}`))
-        else if (id === 'settings') ctx.panels.post(PANEL, { type: 'view', view: 'settings' })
+        if (id === 'refresh') void refresh().catch((e) => ctx.log.warn(`refresh: ${why(e)}`))
       })
     )
   }
-  disposers.push(feeds.on('changed', onFeedChanged))
-  disposers.push(feeds.onChange(() => void sync().then(publish, (e) => ctx.log.warn(`sync: ${why(e)}`))))
-  disposers.push(ctx.schedule(REFRESH_S, () => tick()))
-  const first = tick().catch((e) => ctx.log.error(`first refresh: ${why(e)}`))
 
-  // ---- `ccc inbox` (lib/cli.js) ----
+  // "Done (Inbox)" in the toolbar of every `inbox-item` overlay of an item Inbox holds and shows. The
+  // overlay's data came from its opener: only a key Inbox has itself gets the button.
+  disposers.push(
+    ctx.overlay.buttons(ITEM_TYPE, (info) => {
+      const d = info && info.type && info.type.data
+      if (!isObj(d) || typeof d.source !== 'string' || typeof d.id !== 'string') return []
+      const key = keyOf(d.source, d.id)
+      if (!visibleByKey(key)) return []
+      return [{ id: DONE_BUTTON, label: 'Done (Inbox)', run: async () => ((await markDone(key)) ? { close: true } : undefined) }]
+    })
+  )
+  disposers.push(ctx.schedule(REFRESH_S, () => tick()))
+
+  const first = (async () => {
+    await reloadShared()
+    placeAgenda()
+    await sources.start()
+    started = true
+    updatedAt = now()
+    publish()
+  })().catch((e) => {
+    started = true
+    ctx.log.error(`first read: ${why(e)}`)
+  })
+
+  // ---- `ccc inbox` (lib/cli.js; its v2 commands come with task 32) ----
+
+  /** The list as `ccc inbox` numbers it: every group in order, the group's name in the level column. */
+  function cliRows() {
+    const out = []
+    for (const g of view.groups) {
+      for (const r of g.rows) out.push({ key: r.key, pluginId: r.item.source, id: r.item.id, title: r.item.title, badge: descOf(r.item.source).badge, level: g.name, at: r.item.time })
+    }
+    return out
+  }
 
   if (ctx.cli && typeof ctx.cli.register === 'function') {
     const unregister = ctx.cli.register('inbox', async (argv) => {
       const p = CLI.parse(argv)
       if (p.error) return { stderr: `${p.error}\n`, code: 2 }
       if (p.cmd === 'help') return { stdout: CLI.HELP }
-      // The first refresh has per-call timeouts; this deadline is the belt to them.
+      // The first read has per-call timeouts; this deadline is the belt to them.
       let timer
-      await Promise.race([first, new Promise((r) => { timer = timers.setTimeout(r, opts.cliWaitMs ?? CLI_WAIT_MS) })])
-      timers.clearTimeout(timer)
-      const rows = ranked.rows
+      await Promise.race([first, new Promise((r) => (timer = setTimeout(r, opts.cliWaitMs ?? CLI_WAIT_MS)))])
+      clearTimeout(timer)
+      build(now())
+      const rows = cliRows()
       if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now()) }
       const got = CLI.resolve(rows, p.target)
       if (got.error) return { stderr: `${got.error}\n`, code: 1 }
       const row = got.row
       const title = CLI.oneLine(row.title, CLI.MAX_TITLE)
-      if (row.calendar && p.cmd !== 'open') return { stderr: `"${title}" is a calendar item: it can be opened, not marked done or snoozed.\n`, code: 1 }
-      const t = now()
       try {
         if (p.cmd === 'open') {
-          await act(row.calendar ? { type: 'calOpen', eventId: row.id } : { type: 'open', key: row.key })
+          const reply = await runAction(row.key, 'open')
+          if (!reply.ok) return { stderr: `open failed: ${CLI.oneLine(reply.message || 'the source refused', 300)}\n`, code: 1 }
           return { stdout: `Opened ${title}\n` }
         }
         if (p.cmd === 'done') {
-          await act({ type: 'done', key: row.key })
+          await markDone(row.key)
           return { stdout: `Done: ${title}\n` }
         }
-        const until = untilOf(p.choice, t, { afternoon: settings.afternoon, morning: settings.morning })
+        const until = untilOf(p.choice, now(), SNOOZE_TIMES)
         await act({ type: 'snooze', key: row.key, choice: p.choice })
         return { stdout: `Snoozed until ${until === null ? 'it changes' : CLI.when(until)}: ${title}\n` }
       } catch (e) {
@@ -641,13 +667,31 @@ function createInbox(ctx, opts = {}) {
 
   function dispose() {
     disposed = true
-    for (const s of sources.values()) if (s.timer) timers.clearTimeout(s.timer)
-    if (cal.timer) timers.clearTimeout(cal.timer)
-    if (cal.unsub) cal.unsub()
-    for (const d of disposers) if (typeof d === 'function') d()
+    sources.dispose()
+    jev.dispose()
+    for (const d of disposers) {
+      try {
+        if (typeof d === 'function') d()
+      } catch {}
+    }
   }
 
-  return { first, tick, dispose, act: onPanelMessage, snapshot: () => snapshot(now()), rows: () => ranked.rows, state }
+  return {
+    first,
+    tick,
+    refresh,
+    dispose,
+    act: onPanelMessage,
+    saveSettings,
+    snapshot: () => {
+      build(now())
+      return snapshot(now())
+    },
+    groups: () => build(now()).groups,
+    settings: () => settings,
+    state,
+    jev,
+  }
 }
 
 let inbox = null

@@ -2,348 +2,406 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { createInbox } = require('../dist/host')
-const { fakeCtx, fakeFeed, fakeCalendar, fakeAppStorage, item, flush, NOW, HOUR, CHAT, MAIL, JIRA } = require('./fakes')
+const S = require('../dist/lib/settings')
+const { fakeCtx, fakeFeedV2, fakeJev, fakeAppStorage, item2, flush, NOW, HOUR, CHAT, MAIL, JIRA } = require('./fakes')
 
 const MIN = 60000
 /** Let the host's chains of awaits run out (each source read is a few hops). */
 async function settle() {
   for (let i = 0; i < 20; i++) await flush()
 }
-const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** A host with a movable clock, a 0 ms debounce and a short call limit. */
+/** Manual timers for lib/jev.js: `fire(maxMs)` runs every pending timer of at most that delay. */
+function fakeTimers() {
+  const list = new Map()
+  let n = 0
+  return {
+    set(fn, ms) {
+      list.set(++n, { fn, ms })
+      return n
+    },
+    clear(id) {
+      list.delete(id)
+    },
+    fire(maxMs = 2000) {
+      for (const [id, t] of [...list]) {
+        if (t.ms > maxMs) continue
+        list.delete(id)
+        t.fn()
+      }
+    },
+    size: () => list.size,
+  }
+}
+
+/** A host over v2 fake feeds with a movable clock and manual Jev timers. */
 function setup(o = {}) {
   const ctx = o.ctx || fakeCtx(o.ctxOpts)
   const clock = { t: o.t ?? NOW }
-  const feeds = {}
-  for (const [id, feed] of Object.entries(o.feeds || {})) {
-    feeds[id] = feed
-    ctx.addProvider(id, feed)
-  }
-  const inbox = createInbox(ctx, { now: () => clock.t, debounceMs: 0, callMs: o.callMs ?? 200 })
-  return { ctx, clock, feeds, inbox }
+  for (const [id, feed] of Object.entries(o.feeds || {})) ctx.addProvider(id, feed)
+  const timers = fakeTimers()
+  const inbox = createInbox(ctx, { now: () => clock.t, callMs: o.callMs ?? 200, jevTimers: timers })
+  return { ctx, clock, timers, inbox }
 }
-const ids = (ctx) => ctx.lastState().rows.map((r) => r.id)
-const itemCalls = (feed) => feed.calls.filter((c) => c[0] === 'items').length
+/** group id → item ids, groups with rows only. */
+const groups = (ctx) => Object.fromEntries(ctx.lastState().groups.filter((g) => g.rows.length).map((g) => [g.id, g.rows.map((r) => r.id)]))
+const rowOf = (ctx, id) => ctx.lastState().groups.flatMap((g) => g.rows).find((r) => r.id === id)
+const sourceCalls = (feed) => feed.calls.filter((c) => c[0] === 'act')
 
-test('two providers, then a third joining: each is described once, all rows ranked together', async () => {
-  const chat = fakeFeed(CHAT, [item('c1', { level: 'action', mentionsMe: true })])
-  const mail = fakeFeed(MAIL, [item('m1', { level: 'fyi' })])
+const chatFeed = (items) => fakeFeedV2(CHAT, items)
+const mailFeed = (items) => fakeFeedV2(MAIL, items)
+const jiraFeed = (items) => fakeFeedV2(JIRA, items)
+const actions = (...ids) => ids.map((id) => ({ id, label: id === 'open' ? 'Open' : id === 'markRead' ? 'Mark read' : id }))
+
+test('two sources, then a third: each placed by the default rules, newest first; described once', async () => {
+  const chat = chatFeed([item2('c1', { time: NOW - HOUR }), item2('c2', { time: NOW - MIN, extra: { mentionsMe: true } })])
+  const mail = mailFeed([item2('m1'), item2('m2', { read: true })])
   const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail } })
   await inbox.first
-  assert.deepEqual(ids(ctx), ['c1', 'm1'])
-  const jira = fakeFeed(JIRA, [item('APP-1', { level: 'urgent' })], { markRead: false })
+  await settle()
+  assert.deepEqual(groups(ctx), { now: ['c2'], chat: ['c1'], mail: ['m1'], rest: ['m2'] })
+  const jira = jiraFeed([item2('APP-1')])
   ctx.addProvider('bronos.jira', jira)
   await settle()
-  assert.deepEqual(ids(ctx), ['APP-1', 'c1', 'm1'])
-  assert.deepEqual(ctx.lastState().chips.map((c) => [c.badge, c.count]), [['CHAT', 1], ['MAIL', 1], ['JIRA', 1]])
-  // Once when it joins (a full refresh asks again: see "gains a feature" below).
+  assert.deepEqual(groups(ctx), { now: ['c2'], chat: ['c1'], mail: ['m1'], jira: ['APP-1'], rest: ['m2'] })
+  assert.deepEqual(ctx.lastState().sources.map((s) => [s.badge, s.count]), [['CHAT', 2], ['MAIL', 2], ['JIRA', 1]])
   for (const f of [chat, mail, jira]) assert.equal(f.calls.filter((c) => c[0] === 'describe').length, 1)
-  await inbox.tick()
-  // Items per source by kind: chat 10, mail 10, issues 8.
-  assert.deepEqual(jira.calls.find((c) => c[0] === 'items')[1], { limit: 8 })
+  const r = rowOf(ctx, 'c2')
+  assert.equal(r.reason, 'rule 2: sourceKind is chat and mentionsMe is true')
+  assert.equal(r.badge, 'CHAT')
+  assert.deepEqual(r.actions, [], 'open is the row click, not a row action')
+  assert.equal(r.canOpen, true)
   inbox.dispose()
 })
 
-test('a provider leaving takes its rows and chip with it', async () => {
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': fakeFeed(CHAT, [item('c1')]), 'bronos.mail': fakeFeed(MAIL, [item('m1')]) } })
+test('a source leaving takes its rows and its line with it', async () => {
+  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chatFeed([item2('c1')]), 'bronos.mail': mailFeed([item2('m1')]) } })
   await inbox.first
   ctx.removeProvider('bronos.chat')
   await settle()
-  assert.deepEqual(ids(ctx), ['m1'])
-  assert.deepEqual(ctx.lastState().chips.map((c) => c.pluginId), ['bronos.mail'])
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  assert.deepEqual(ctx.lastState().sources.map((s) => s.pluginId), ['bronos.mail'])
   inbox.dispose()
 })
 
-test('`changed` re-reads only its own source', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')])
-  const mail = fakeFeed(MAIL, [item('m1')])
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail } })
+test('an item event re-places that item only; a rules change re-places every item', async () => {
+  const { ctx, clock, inbox } = setup({ feeds: { 'bronos.mail': mailFeed([item2('m1', { time: NOW - 30 * MIN }), item2('m2', { time: NOW - 30 * MIN })]) } })
   await inbox.first
+  // A time rule: m1 and m2 are newer than 40 minutes when placed.
+  await inbox.saveSettings({ ...S.defaults(), rules: [{ id: 'fresh', enabled: true, group: 'now', when: [{ field: 'time', op: 'newerThan', value: 40 }] }, ...S.defaults().rules] })
   await settle()
-  const before = { chat: itemCalls(chat), mail: itemCalls(mail) }
-  chat.items = [item('c1'), item('c2')]
-  ctx.emitFeed('bronos.chat', 'changed')
-  ctx.emitFeed('bronos.chat', 'changed')
-  await settle()
-  await wait(5)
-  await settle()
-  assert.equal(itemCalls(chat), before.chat + 1, 'one read for two events (debounced)')
-  assert.equal(itemCalls(mail), before.mail)
-  assert.deepEqual(ids(ctx).sort(), ['c1', 'c2', 'm1'])
-  inbox.dispose()
-})
-
-test('a throwing source keeps its last items with an error line; a hanging one never holds the others', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')])
-  const mail = fakeFeed(MAIL, [item('m1')])
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail }, callMs: 50 })
-  await inbox.first
-  chat.throwOn = 'items'
-  mail.impl.items = () => new Promise(() => {})
-  mail.items = []
+  assert.deepEqual(groups(ctx), { now: ['m1', 'm2'] })
+  // Time passes: nothing moves by itself (placements stay until something about the item changes).
+  clock.t = NOW + HOUR
   await inbox.tick()
-  const st = ctx.lastState()
-  assert.deepEqual(ids(ctx).sort(), ['c1', 'm1'])
-  const chip = (id) => st.chips.find((c) => c.pluginId === id)
-  assert.equal(chip('bronos.chat').stale, true)
-  assert.match(chip('bronos.chat').problem, /Chat: feed broke/)
-  assert.match(chip('bronos.mail').problem, /did not answer/)
-  inbox.dispose()
-})
-
-test('a signed-out source shows its line and its cached items', async () => {
-  const jira = fakeFeed(JIRA, [item('APP-1')], { markRead: false })
-  jira.state = 'signedOut'
-  jira.message = 'signed out, showing the last items'
-  const { ctx, inbox } = setup({ feeds: { 'bronos.jira': jira } })
-  await inbox.first
-  assert.deepEqual(ids(ctx), ['APP-1'])
-  assert.equal(ctx.lastState().chips[0].problem, 'Jira: signed out, showing the last items')
-  inbox.dispose()
-})
-
-test('done calls markRead only where the feed has it, and only with the setting on; undo brings it back', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')])
-  const jira = fakeFeed(JIRA, [item('APP-1')], { markRead: false })
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.jira': jira } })
-  await inbox.first
-  const key = (id) => ctx.lastState().rows.find((r) => r.id === id).key
-  await inbox.act({ type: 'done', key: key('c1') })
-  await inbox.act({ type: 'done', key: key('APP-1') })
-  assert.deepEqual(chat.calls.filter((c) => c[0] === 'markRead'), [['markRead', 'c1']])
-  assert.deepEqual(ids(ctx), [])
-  assert.match(ctx.lastState().undo.label, /^Done: /)
-  // Undo takes back the last action only.
-  await inbox.act({ type: 'undo' })
-  assert.deepEqual(ids(ctx), ['APP-1'])
-  assert.equal(ctx.lastState().undo, null)
-  assert.deepEqual(ctx.lastState().today.map((e) => e.id), ['c1'])
-  await inbox.act({ type: 'restore', pluginId: 'bronos.chat', id: 'c1' })
-  assert.deepEqual(ids(ctx).sort(), ['APP-1', 'c1'])
-  // Setting off: no markRead.
-  await inbox.act({ type: 'saveSettings', settings: { doneMarksRead: false } })
-  await inbox.act({ type: 'done', key: key('c1') })
-  assert.equal(chat.calls.filter((c) => c[0] === 'markRead').length, 1)
-  inbox.dispose()
-})
-
-test('panel actions only touch rows the host listed; open restores a back item', async () => {
-  const mail = fakeFeed(MAIL, [item('m1', { rev: 'r1' })])
-  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
-  await inbox.first
-  await inbox.act({ type: 'done', key: 'bronos.mail\u0000nope' })
-  await inbox.act({ type: 'open', key: 'bronos.mail\u0000nope' })
-  assert.equal(mail.calls.filter((c) => c[0] === 'open' || c[0] === 'markRead').length, 0)
-  const k = ctx.lastState().rows[0].key
-  await inbox.act({ type: 'done', key: k })
-  mail.items = [item('m1', { rev: 'r2' })]
-  await inbox.tick()
-  assert.equal(ctx.lastState().rows[0].back, true)
-  await inbox.act({ type: 'open', key: k })
-  assert.deepEqual(mail.calls.filter((c) => c[0] === 'open'), [['open', 'm1']])
-  assert.equal(ctx.lastState().rows[0].back, undefined)
-  inbox.dispose()
-})
-
-test('badge modes: urgent (default), urgent + action, all, off', async () => {
-  const chat = fakeFeed(CHAT, [item('u', { level: 'urgent' }), item('a', { level: 'action' }), item('f', { level: 'fyi' })])
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat } })
-  await inbox.first
-  assert.equal(ctx.badges.at(-1), 1)
-  await inbox.act({ type: 'saveSettings', settings: { badge: 'action' } })
-  assert.equal(ctx.badges.at(-1), 2)
-  await inbox.act({ type: 'saveSettings', settings: { badge: 'all' } })
-  assert.equal(ctx.badges.at(-1), 3)
-  await inbox.act({ type: 'saveSettings', settings: { badge: 'off' } })
-  assert.equal(ctx.badges.at(-1), null)
-  inbox.dispose()
-})
-
-test('the calendar: read when available, re-read on its `changed`, join opens only an https meet link', async () => {
-  const ev = { id: 'e1', title: 'Design review', start: NOW + 18 * MIN, end: NOW + 48 * MIN, allDay: false, response: 'needsAction', meetUrl: 'https://meet.example.com/x' }
-  const calendar = fakeCalendar({ events: [ev] }, [ev])
-  const { ctx, inbox } = setup({ ctxOpts: { calendar }, feeds: { 'bronos.chat': fakeFeed(CHAT, [item('c1')]) } })
-  await inbox.first
-  assert.equal(ctx.lastState().calendar.day.events[0].title, 'Design review')
-  assert.equal(ctx.lastState().calendar.position, 'top')
-  calendar.day = { ...calendar.day, events: [{ ...ev, title: 'Moved review' }] }
-  ctx.emitCalendar('changed')
+  assert.deepEqual(groups(ctx), { now: ['m1', 'm2'] })
+  ctx.emitFeed('bronos.mail', 'item', item2('m1', { time: NOW - 30 * MIN, title: 'new title' }))
   await settle()
-  await wait(5)
+  assert.deepEqual(groups(ctx), { now: ['m2'], mail: ['m1'] }, 'only the item that changed was placed again')
+  assert.equal(rowOf(ctx, 'm1').title, 'new title')
+  // A rules change (the settings page) places every item again, at once in this window.
+  await inbox.saveSettings({ ...S.defaults() })
   await settle()
-  assert.equal(ctx.lastState().calendar.day.events[0].title, 'Moved review')
-  await inbox.act({ type: 'join', eventId: 'e1' })
-  await inbox.act({ type: 'join', eventId: 'unknown' })
-  assert.deepEqual(ctx.external, ['https://meet.example.com/x'])
-  await inbox.act({ type: 'respond', eventId: 'e1', answer: 'accepted' })
-  await inbox.act({ type: 'respond', eventId: 'e1', answer: 'sure' })
-  assert.deepEqual(calendar.calls.filter((c) => c[0] === 'respond'), [['respond', 'e1', 'accepted']])
-  // In the list: the pin row under the urgent items.
-  await inbox.act({ type: 'saveSettings', settings: { calendar: { position: 'inline' } } })
-  // No urgent item, so the pinned event comes first.
-  assert.deepEqual(ids(ctx), ['e1', 'c1'])
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm2'] })
   inbox.dispose()
 })
 
-test('no calendar provider: no calendar block', async () => {
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': fakeFeed(CHAT, [item('c1')]) } })
-  await inbox.first
-  assert.equal(ctx.lastState().calendar, null)
-  inbox.dispose()
-})
-
-test('a snooze that ends is announced once; one that ended long ago is not', async () => {
-  const chat = fakeFeed(CHAT, [item('c1'), item('c2')])
-  const { ctx, clock, inbox } = setup({ feeds: { 'bronos.chat': chat } })
-  await inbox.first
-  const key = (id) => ctx.lastState().rows.find((r) => r.id === id).key
-  await inbox.act({ type: 'snooze', key: key('c1'), choice: '1h' })
-  await inbox.act({ type: 'snooze', key: key('c2'), choice: '1h' })
-  assert.deepEqual(ids(ctx), [])
-  clock.t = NOW + HOUR + MIN
-  // c2's entry: pretend it ended a day ago (the app was closed).
-  const e2 = [...inbox.state.entries().values()].find((e) => e.id === 'c2')
-  await ctx.appStorage.set([...ctx.appStorage.map.keys()].find((k) => ctx.appStorage.map.get(k).id === 'c2'), { ...e2, until: NOW - 24 * HOUR })
-  await inbox.tick()
-  assert.deepEqual(ctx.notes.map((n) => n.text), ['Item c1'])
-  assert.equal(ctx.notes[0].opts.title, 'Inbox: snooze ended')
-  await inbox.tick()
-  assert.equal(ctx.notes.length, 1)
-  // Back at the top with the snooze-back bonus.
-  assert.match(ctx.lastState().rows.find((r) => r.id === 'c1').why, /snooze ended \+500/)
-  inbox.dispose()
-})
-
-test('two windows: a done in one shows in the other when its panel becomes visible', async () => {
+test('settings saved in another window apply on the next read here', async () => {
   const store = fakeAppStorage()
-  const w1 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': fakeFeed(MAIL, [item('m1')]) } })
-  const w2 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': fakeFeed(MAIL, [item('m1')]) } })
+  const w1 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  const w2 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
   await Promise.all([w1.inbox.first, w2.inbox.first])
-  await w1.inbox.act({ type: 'done', key: w1.ctx.lastState().rows[0].key })
-  assert.deepEqual(ids(w2.ctx), ['m1'])
+  const rules = [{ id: 'all', enabled: true, group: 'now', when: [{ field: 'sourceKind', op: 'is', value: 'mail' }] }]
+  await w1.inbox.saveSettings({ ...S.defaults(), rules })
+  await settle()
+  assert.deepEqual(groups(w1.ctx), { now: ['m1'] })
+  assert.deepEqual(groups(w2.ctx), { mail: ['m1'] })
   await w2.ctx.sendPanel({ type: 'visible' })
-  assert.deepEqual(ids(w2.ctx), [])
+  await settle()
+  assert.deepEqual(groups(w2.ctx), { now: ['m1'] })
   w1.inbox.dispose()
   w2.inbox.dispose()
 })
 
-test('a source switched off leaves the list and is not read; settings survive a reload', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')])
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': fakeFeed(MAIL, [item('m1')]) } })
+const bossRule = { id: 'boss', enabled: true, group: 'now', when: [{ field: 'sourceKind', op: 'is', value: 'mail' }], jev: { question: 'Is this urgent?', min: 0.8 } }
+const withBoss = () => ({ ...S.defaults(), rules: [bossRule, ...S.defaults().rules] })
+
+test('a Jev rule: pending first ("Jev…"), the item moves once when the answer comes, then stays', async () => {
+  const store = fakeAppStorage()
+  await S.saveSettings(store, withBoss())
+  const jev = fakeJev((it) => (it.text.startsWith('Urgent') ? 0.95 : 0.1))
+  const mail = mailFeed([item2('m1', { title: 'Urgent: the release' }), item2('m2', { title: 'Newsletter', time: NOW - 2 * HOUR })])
+  const { ctx, timers, inbox } = setup({ ctx: fakeCtx({ appStorage: store, jev }), feeds: { 'bronos.mail': mail, 'bronos.chat': chatFeed([item2('c1')]) } })
   await inbox.first
-  await inbox.act({ type: 'saveSettings', settings: { sources: { 'bronos.chat': { on: false } } } })
-  const n = itemCalls(chat)
-  await inbox.tick()
-  assert.equal(itemCalls(chat), n)
-  assert.deepEqual(ids(ctx), ['m1'])
-  assert.deepEqual(ctx.lastState().chips.map((c) => c.pluginId), ['bronos.mail'])
-  assert.equal(ctx.lastState().providers.find((p) => p.pluginId === 'bronos.chat').on, false)
+  await settle()
+  assert.deepEqual(groups(ctx), { chat: ['c1'], mail: ['m1', 'm2'] })
+  assert.equal(rowOf(ctx, 'm1').jev, 'pending')
+  assert.match(rowOf(ctx, 'm1').reason, /rule 1: Jev…/)
+  timers.fire()
+  await settle()
+  assert.equal(jev.calls.length, 1, 'one grid for the question; chat never asked (pre-filter)')
+  assert.deepEqual(jev.calls[0].items.map((i) => i.text).sort(), ['Newsletter', 'Urgent: the release'])
+  assert.deepEqual(groups(ctx), { now: ['m1'], chat: ['c1'], mail: ['m2'] })
+  assert.equal(rowOf(ctx, 'm1').reason, 'rule 1: sourceKind is mail and Jev 0.95')
+  assert.equal(rowOf(ctx, 'm1').jev, null)
+  // A read change of m1 (same rev) is placed again from the cache: no new request.
+  ctx.emitFeed('bronos.mail', 'item', item2('m1', { title: 'Urgent: the release', read: true }))
+  await settle()
+  timers.fire()
+  await settle()
+  assert.equal(jev.calls.length, 1)
+  assert.deepEqual(groups(ctx), { now: ['m1'], chat: ['c1'], mail: ['m2'] })
   inbox.dispose()
 })
 
-test('an app without useAll: the panel gets the update message', async () => {
-  const ctx = fakeCtx({ old: true })
-  const inbox = createInbox(ctx)
-  await ctx.sendPanel({ type: 'hello' })
-  assert.match(ctx.lastState().fatal, /0\.9\.7/)
+test('a full placement drops queued Jev requests of a question that went; dispose stops Jev', async () => {
+  const store = fakeAppStorage()
+  await S.saveSettings(store, withBoss())
+  const jev = fakeJev()
+  const { timers, inbox } = setup({ ctx: fakeCtx({ appStorage: store, jev }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await inbox.first
+  await settle()
+  assert.equal(inbox.jev.pending(), 1)
+  await inbox.saveSettings(S.defaults())
+  await settle()
+  assert.equal(inbox.jev.pending(), 0, 'the edited rules ask nothing: the queued request is dropped')
+  timers.fire()
+  await settle()
+  assert.equal(jev.calls.length, 0)
+  // Queued again, then the plugin stops: no timer is left and nothing is asked.
+  await inbox.saveSettings(withBoss())
+  await settle()
+  assert.equal(inbox.jev.pending(), 1)
+  inbox.dispose()
+  assert.equal(timers.size(), 0)
+  assert.equal(jev.calls.length, 0)
+})
+
+test('Jev unavailable: the rule is skipped with its reason, and the item is placed again when a provider appears', async () => {
+  const store = fakeAppStorage()
+  await S.saveSettings(store, withBoss())
+  const ctx = fakeCtx({ appStorage: store })
+  const { timers, inbox } = setup({ ctx, feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await inbox.first
+  await settle()
+  assert.equal(rowOf(ctx, 'm1').reason, 'rule 6: sourceKind is mail · rule 1 skipped: Jev unavailable')
+  ctx.jev = fakeJev(() => 0.9)
+  // The minute check sees the provider and hands the parked item over: it is asked, then moves.
+  timers.fire(60000)
+  await settle()
+  timers.fire()
+  await settle()
+  assert.equal(ctx.jev.calls.length, 1)
+  assert.deepEqual(groups(ctx), { now: ['m1'] })
   inbox.dispose()
 })
+
+test('Done via the overlay button: only for items Inbox shows, closes the overlay, never calls the source', async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  assert.deepEqual(await ctx.buttonsFor({ source: 'bronos.chat', id: 'm1' }), [], 'not an item of that source')
+  assert.deepEqual(await ctx.buttonsFor({ source: 'bronos.mail', id: 'nope' }), [])
+  assert.deepEqual(await ctx.buttonsFor('junk'), [])
+  const [b, ...more] = await ctx.buttonsFor({ source: 'bronos.mail', id: 'm1' })
+  assert.equal(more.length, 0)
+  assert.equal(b.label, 'Done (Inbox)')
+  assert.deepEqual(await b.run(), { close: true })
+  assert.deepEqual(groups(ctx), {})
+  assert.deepEqual(sourceCalls(mail), [], 'Done is Inbox memory: no markRead, no act')
+  assert.deepEqual(await ctx.buttonsFor({ source: 'bronos.mail', id: 'm1' }), [], 'done already')
+  assert.deepEqual(ctx.lastState().done.rows.map((r) => r.id), ['m1'])
+  assert.equal(ctx.lastState().undo.label, 'Done: Item m1')
+  inbox.dispose()
+})
+
+test('Done from the row and `ccc inbox done` make no source call; undo and Back to Inbox bring it back', async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') }), item2('m2', { time: NOW - 2 * HOUR, actions: actions('open', 'markRead') })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  assert.deepEqual(groups(ctx), { mail: ['m2'] })
+  await ctx.sendPanel({ type: 'undo' })
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm2'] })
+  assert.equal((await ctx.runCli(['done', 'bronos.mail:m2'])).stdout, 'Done: Item m2\n')
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  assert.deepEqual(sourceCalls(mail), [])
+  const back = ctx.lastState().done.rows.find((r) => r.id === 'm2')
+  await ctx.sendPanel({ type: 'restore', key: back.key })
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm2'] })
+  // A new rev brings a done item back marked "back"; a read change alone does not.
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  ctx.emitFeed('bronos.mail', 'item', item2('m1', { read: true, actions: actions('open', 'markRead') }))
+  await settle()
+  assert.equal(rowOf(ctx, 'm1'), undefined)
+  ctx.emitFeed('bronos.mail', 'item', item2('m1', { rev: 'm1-r2', actions: actions('open', 'markRead') }))
+  await settle()
+  assert.equal(rowOf(ctx, 'm1').back, true)
+  assert.deepEqual(sourceCalls(mail), [])
+  inbox.dispose()
+})
+
+test('the agenda slot follows the setting: placed at start, moved and removed on a change, never repeated', async () => {
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mailFeed([]) } })
+  await inbox.first
+  assert.deepEqual(ctx.slotPlacements, [[{ type: 'agenda', position: 'top', height: 140 }]])
+  await inbox.saveSettings({ ...S.defaults(), agenda: 'bottom' })
+  await inbox.saveSettings({ ...S.defaults(), agenda: 'bottom' })
+  await inbox.saveSettings({ ...S.defaults(), agenda: 'off' })
+  await settle()
+  assert.deepEqual(ctx.slotPlacements.slice(1), [[{ type: 'agenda', position: 'bottom', height: 140 }], null])
+  assert.equal(ctx.lastState().agenda, 'off')
+  inbox.dispose()
+})
+
+test('the agenda setting stored before start is placed from the start', async () => {
+  const store = fakeAppStorage()
+  await S.saveSettings(store, { ...S.defaults(), agenda: 'off' })
+  const { ctx, inbox } = setup({ ctx: fakeCtx({ appStorage: store }) })
+  await inbox.first
+  assert.deepEqual(ctx.slotPlacements, [null])
+  inbox.dispose()
+})
+
+test('the badge counts unread items of badge groups only', async () => {
+  const mail = mailFeed([item2('m1'), item2('m2'), item2('m3', { read: true })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail, 'bronos.chat': chatFeed([item2('c1', { read: null })]) } })
+  await inbox.first
+  await settle()
+  // m3 is read (Rest, no badge); c1 has no read state.
+  assert.equal(ctx.badges.at(-1), 2)
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  assert.equal(ctx.badges.at(-1), 1)
+  await inbox.saveSettings({ ...S.defaults(), groups: S.defaults().groups.map((g) => ({ ...g, badge: false })) })
+  await settle()
+  assert.equal(ctx.badges.at(-1), null)
+  inbox.dispose()
+})
+
+test("row actions go to act(id, action) on the item's own source; a refusal shows its message", async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') })])
+  const chat = chatFeed([item2('c1')])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail, 'bronos.chat': chat } })
+  await inbox.first
+  await settle()
+  const key = rowOf(ctx, 'm1').key
+  assert.deepEqual(rowOf(ctx, 'm1').actions, [{ id: 'markRead', label: 'Mark read' }])
+  await ctx.sendPanel({ type: 'open', key })
+  await ctx.sendPanel({ type: 'act', key, action: 'markRead' })
+  assert.deepEqual(sourceCalls(mail), [['act', 'm1', 'open'], ['act', 'm1', 'markRead']])
+  assert.deepEqual(sourceCalls(chat), [])
+  mail.actReply = { ok: false, message: 'Google refused the change' }
+  await ctx.sendPanel({ type: 'act', key, action: 'markRead' })
+  assert.equal(ctx.posts.at(-1).text, 'Mark read failed: Google refused the change')
+  // An action the item does not list never reaches the source.
+  await ctx.sendPanel({ type: 'act', key, action: 'delete' })
+  assert.equal(sourceCalls(mail).length, 3)
+  assert.match(ctx.posts.at(-1).text, /no such action/)
+  await ctx.sendPanel({ type: 'act', key: 'bronos.mail\u0000nope', action: 'open' })
+  assert.match(ctx.posts.at(-1).text, /no longer in the Inbox/)
+  mail.throwOn = 'act'
+  await ctx.sendPanel({ type: 'open', key })
+  assert.match(ctx.posts.at(-1).text, /^Open failed: act broke/)
+  inbox.dispose()
+})
+
+test('the header: updated time and refresh only; refresh asks every source for its snapshot', async () => {
+  const mail = mailFeed([item2('m1')])
+  const chat = chatFeed([])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail, 'bronos.chat': chat } })
+  await inbox.first
+  const h = ctx.headers.at(-1)
+  assert.match(h.meta, /^updated \d\d:\d\d$/)
+  assert.deepEqual(h.actions.map((a) => a.id), ['refresh'])
+  const snaps = () => [mail, chat].map((f) => f.calls.filter((c) => c[0] === 'snapshot').length)
+  const before = snaps()
+  mail.items = [item2('m1'), item2('m9')]
+  ctx.clickAction('refresh')
+  await settle()
+  assert.deepEqual(snaps(), before.map((n) => n + 1))
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm9'] })
+  inbox.dispose()
+})
+
+test('a source that is not ok: its line says so and its last list stays, marked stale', async () => {
+  const mail = mailFeed([item2('m1')])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  ctx.emitFeed('bronos.mail', 'sync', { items: [], state: 'signedOut', message: 'sign in again', asOf: NOW })
+  await settle()
+  const line = ctx.lastState().sources[0]
+  assert.equal(line.state, 'signedOut')
+  assert.equal(line.message, 'sign in again')
+  assert.equal(line.stale, true)
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  inbox.dispose()
+})
+
+test('search: every item, Rest and Done included, grouped as the list, Done ones marked', async () => {
+  const mail = mailFeed([item2('m1', { title: 'Budget review' }), item2('m2', { title: 'Lunch', preview: 'about the budget', time: NOW - 2 * HOUR }), item2('m3', { title: 'Old budget', read: true })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  await ctx.sendPanel({ type: 'search', query: '  BUDGET ' })
+  const s = ctx.lastState().search
+  assert.equal(s.query, 'BUDGET')
+  assert.equal(s.count, 3)
+  assert.deepEqual(s.groups.map((g) => [g.id, g.rows.map((r) => [r.id, r.done])]), [['mail', [['m1', true], ['m2', false]]], ['rest', [['m3', false]]]])
+  await ctx.sendPanel({ type: 'search', query: '' })
+  assert.equal(ctx.lastState().search, null)
+  inbox.dispose()
+})
+
+test('snooze hides an item; when it wakes the rules place it, marked back, announced once', async () => {
+  const { ctx, clock, inbox } = setup({ feeds: { 'bronos.chat': chatFeed([item2('c1')]) } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'snooze', key: rowOf(ctx, 'c1').key, choice: '1h' })
+  assert.deepEqual(groups(ctx), {})
+  clock.t = NOW + HOUR + MIN
+  await inbox.tick()
+  assert.deepEqual(groups(ctx), { chat: ['c1'] })
+  assert.equal(rowOf(ctx, 'c1').back, true)
+  assert.deepEqual(ctx.notes.map((n) => n.text), ['Item c1'])
+  await inbox.tick()
+  assert.equal(ctx.notes.length, 1)
+  inbox.dispose()
+})
+
+for (const missing of ['useAll', 'slots', 'overlay.buttons']) {
+  test(`an app without ${missing}: the panel says which cc-cockpit to get, nothing is read`, async () => {
+    const mail = mailFeed([item2('m1')])
+    const ctx = fakeCtx({ missing: [missing] })
+    if (missing !== 'useAll') ctx.addProvider('bronos.mail', mail)
+    const inbox = createInbox(ctx, { now: () => NOW })
+    await settle()
+    await ctx.sendPanel({ type: 'hello' })
+    assert.match(ctx.lastState().fatal, /needs cc-cockpit 0\.10\.0/)
+    assert.deepEqual(mail.calls, [])
+    inbox.dispose()
+  })
+}
 
 test('junk from the panel is ignored', async () => {
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': fakeFeed(CHAT, [item('c1')]) } })
+  const mail = mailFeed([item2('m1')])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
   await inbox.first
-  for (const m of [null, 'x', { type: 5 }, { type: 'snooze', key: 'x', choice: 'forever' }, { type: 'restore', pluginId: 1 }, { type: 'nope' }]) await ctx.sendPanel(m)
-  assert.deepEqual(ids(ctx), ['c1'])
+  await settle()
+  for (const m of [null, 'x', 5, { type: 7 }, { type: 'done', key: 5 }, { type: 'snooze', key: rowOf(ctx, 'm1').key, choice: 'never' }, { type: 'restore', key: {} }, { type: 'search', query: { a: 1 } }]) await ctx.sendPanel(m)
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  assert.deepEqual(sourceCalls(mail), [])
   inbox.dispose()
 })
 
-test('no providers at all: an empty list, no chips, no badge, and the CLI says so', async () => {
-  const { ctx, inbox } = setup({})
+test('no sources: empty groups, no badge, and the CLI says so', async () => {
+  const { ctx, inbox } = setup()
   await inbox.first
-  const st = ctx.lastState()
-  assert.deepEqual([st.rows, st.chips, st.calendar], [[], [], null])
-  assert.deepEqual(ctx.badges, [null])
-  assert.match((await ctx.runCli([])).stdout, /Inbox zero/)
-  inbox.dispose()
-})
-
-test('the Read chip: read messages of the sources that offer them, newest first; they open and never take done', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r2', { unread: false, at: NOW - HOUR }), item('r1', { unread: false, at: NOW - 3 * HOUR }), item('sneaky', { unread: true })] })
-  const jira = fakeFeed(JIRA, [item('APP-1')], { markRead: false })
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.jira': jira } })
-  await inbox.first
-  const st = ctx.lastState()
-  assert.deepEqual(st.read.map((r) => r.id), ['r2', 'r1'], 'unread rows from recent are left out')
-  assert.equal(st.read[0].read, true)
-  assert.deepEqual(chat.calls.find((c) => c[0] === 'recent')[1], { limit: 20 })
-  // The setting: asked of each source and the cap of the merged list.
-  await inbox.act({ type: 'saveSettings', settings: { readItems: 1 } })
-  assert.deepEqual(chat.calls.filter((c) => c[0] === 'recent').at(-1)[1], { limit: 1 })
-  assert.deepEqual(ctx.lastState().read.map((r) => r.id), ['r2'])
-  await inbox.act({ type: 'saveSettings', settings: { readItems: 20 } })
-  await inbox.act({ type: 'open', key: st.read[0].key })
-  assert.deepEqual(chat.calls.filter((c) => c[0] === 'open'), [['open', 'r2']])
-  await inbox.act({ type: 'done', key: st.read[0].key })
-  await inbox.act({ type: 'snooze', key: st.read[0].key, choice: '1h' })
-  assert.equal(chat.calls.filter((c) => c[0] === 'markRead').length, 0)
-  assert.equal(ctx.lastState().today.length, 0)
-  // A source switched off takes its read rows with it.
-  await inbox.act({ type: 'saveSettings', settings: { sources: { 'bronos.chat': { on: false } } } })
-  assert.deepEqual(ctx.lastState().read, [])
-  inbox.dispose()
-})
-
-test('no source offers read messages: no Read chip', async () => {
-  const { ctx, inbox } = setup({ feeds: { 'bronos.jira': fakeFeed(JIRA, [item('APP-1')], { markRead: false }) } })
-  await inbox.first
-  assert.equal(ctx.lastState().read, null)
-  inbox.dispose()
-})
-
-test('a provider that gains a feature while it stays listed is seen on the next full refresh', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')])
-  const { ctx, clock, inbox } = setup({ feeds: { 'bronos.chat': chat } })
-  await inbox.first
-  assert.equal(ctx.lastState().read, null)
-  clock.t += 61000
-  // The plugin reloaded with `recent` (same plugin id, no onChange).
-  chat.impl.features = async () => ['markRead', 'recent']
-  chat.impl.recent = async () => ({ items: [item('r1', { unread: false })], asOf: NOW, state: 'ok' })
-  await inbox.tick()
-  assert.deepEqual(ctx.lastState().read.map((r) => r.id), ['r1'])
-  // A describe that fails later keeps the last description.
-  chat.impl.describe = async () => { throw new Error('busy') }
-  clock.t += 61000
-  await inbox.tick()
-  assert.equal(ctx.lastState().chips[0].label, 'Chat')
-  assert.equal(ctx.lastState().chips[0].problem, undefined)
-  inbox.dispose()
-})
-
-test('Mark unread on a read row: the source marks it, the row leaves Read for the list; only where offered', async () => {
-  const chat = fakeFeed(CHAT, [item('c1')], { recent: [item('r1', { unread: false }), item('t1', { unread: false, canUnread: false })], markUnread: true })
-  const mail = fakeFeed(MAIL, [], { recent: [item('m9', { unread: false })] })
-  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat, 'bronos.mail': mail } })
-  await inbox.first
-  const read = (id) => ctx.lastState().read.find((r) => r.id === id)
-  assert.equal(read('r1').canUnread, true)
-  assert.equal(read('m9').canUnread, false)
-  // A thread Chat cannot mark: no button, and the action is refused without a call.
-  assert.equal(read('t1').canUnread, false)
-  await inbox.act({ type: 'markUnread', key: read('t1').key })
-  assert.equal(chat.calls.some((c) => c[0] === 'markUnread'), false)
-  await inbox.act({ type: 'markUnread', key: read('m9').key })
-  assert.equal(mail.calls.some((c) => c[0] === 'markUnread'), false)
-  await inbox.act({ type: 'markUnread', key: read('r1').key })
-  assert.deepEqual(chat.calls.filter((c) => c[0] === 'markUnread'), [['markUnread', 'r1']])
-  assert.deepEqual(ids(ctx).sort(), ['c1', 'r1'])
-  assert.equal(read('r1'), undefined)
-  // A refusal reaches the panel as a notice.
-  chat.recent = [item('r2', { unread: false })]
-  await inbox.tick()
-  chat.throwOn = 'markUnread'
-  await ctx.sendPanel({ type: 'markUnread', key: read('r2').key })
-  assert.match(ctx.posts.at(-1).text, /Mark unread failed: chat: Google refused/)
+  assert.deepEqual(groups(ctx), {})
+  assert.deepEqual(ctx.lastState().sources, [])
+  assert.equal(ctx.badges.at(-1), null)
+  assert.equal((await ctx.runCli([])).stdout, 'Inbox zero.\n')
   inbox.dispose()
 })

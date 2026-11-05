@@ -8,16 +8,16 @@ const MAX_TITLE = 120
 const CHOICES = ['1h', 'afternoon', 'tomorrow', 'changes']
 const CAL_REF = 'calendar'
 
-const HELP = `ccc inbox: the ranked list of what needs you (bronos.inbox)
+const HELP = `ccc inbox: the list of what needs you, in groups by your rules (bronos.inbox)
 
-  ccc inbox [list]                       the list, one line per item: number, badge, level, title, age, ref
+  ccc inbox [list]                       the list, one line per item: number, badge, group, title, age, ref
   ccc inbox open <n|ref>                 open the item in its own plugin (marks nothing done)
-  ccc inbox done <n|ref>                 mark it done (and read at its source, as in the panel)
+  ccc inbox done <n|ref>                 mark it done in Inbox (the source is not touched)
   ccc inbox snooze <n|ref> <choice>      choice: 1h, afternoon, tomorrow or changes (until the item changes)
   ccc inbox help                         this text
 
 <n> is the number in the list as it stands now; <ref> is the stable reference printed at the end of each
-line (<pluginId>:<id>). The calendar item can be opened, not marked done or snoozed.
+line (<pluginId>:<id>).
 `
 
 /** One line, no control characters (C0, DEL, C1, line and paragraph separators), cut to \`max\`. */

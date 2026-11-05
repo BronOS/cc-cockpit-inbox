@@ -1,88 +1,12 @@
 'use strict'
-// Fakes shared by the suites: a cc-cockpit ctx written from `ccc guide api` (0.9.7), with
-// `ctx.services.useAll('inbox-feed')` over providers a test adds and removes, a `calendar` provider
-// behind `ctx.services.use`, an app-wide store two "windows" can share, and recorded posts, badges,
-// notifications and opened links. Every name and id here is example data (Ann Example, APP-1).
-// (bronos.calendar's fakes.js, with the services of a collector.)
+// Fakes shared by the suites: a cc-cockpit ctx written from `ccc guide api` (0.10.0), with
+// `ctx.services.useAll('inbox-feed')` over providers a test adds and removes, a `jev` provider behind
+// `ctx.services.use`, an app-wide store two "windows" can share, and recorded posts, badges, headers,
+// slot placements, overlay type buttons, notifications and opened links. Every name and id here is
+// example data (Ann Example, APP-1). (bronos.calendar's fakes.js, with the services of a collector.)
 
 const NOW = Date.parse('2026-11-03T12:42:00Z')
 const HOUR = 3600000
-
-/** A FeedItem as a provider answers it (the design's feed contract). */
-function item(id, o = {}) {
-  return {
-    id,
-    rev: o.rev || `${id}-r1`,
-    title: o.title || `Item ${id}`,
-    from: o.from || 'Ann Example',
-    where: o.where || 'Inbox',
-    at: o.at === undefined ? NOW - HOUR : o.at,
-    level: o.level || 'action',
-    unread: o.unread === undefined ? true : o.unread,
-    ...(o.direct !== undefined ? { direct: o.direct } : {}),
-    ...(o.mentionsMe !== undefined ? { mentionsMe: o.mentionsMe } : {}),
-    ...(o.dueAt !== undefined ? { dueAt: o.dueAt } : {}),
-    ...(o.jiraKey !== undefined ? { jiraKey: o.jiraKey } : {}),
-    ...(o.canUnread !== undefined ? { canUnread: o.canUnread } : {}),
-  }
-}
-
-/**
- * A fake `inbox-feed` provider: `items` answers what the test put in `feed.items` (with `state`),
- * and every call is recorded. `opts.markRead === false` plays Jira (no markRead, features []).
- */
-function fakeFeed(describe, items = [], opts = {}) {
-  const feed = {
-    items,
-    state: 'ok',
-    message: undefined,
-    calls: [],
-    throwOn: null,
-    impl: {
-      async describe() {
-        feed.calls.push(['describe'])
-        return describe
-      },
-      async features() {
-        return [...(opts.markRead === false ? [] : ['markRead']), ...(opts.recent ? ['recent'] : []), ...(opts.markUnread ? ['markUnread'] : [])]
-      },
-      async items(o) {
-        feed.calls.push(['items', o])
-        if (feed.throwOn === 'items') throw new Error('feed broke')
-        const limit = Math.max(1, Math.min(50, (o && o.limit) || 10))
-        return { items: feed.items.slice(0, limit), asOf: NOW, state: feed.state, ...(feed.message ? { message: feed.message } : {}) }
-      },
-      async open(id) {
-        feed.calls.push(['open', id])
-      },
-    },
-  }
-  if (opts.recent) {
-    // `opts.recent`: the read rows the provider's read lane holds (Chat Recent, Gmail Read).
-    feed.recent = opts.recent
-    feed.impl.recent = async (o) => {
-      feed.calls.push(['recent', o])
-      return { items: feed.recent.slice(0, (o && o.limit) || 20), asOf: NOW, state: 'ok' }
-    }
-  }
-  if (opts.markUnread) {
-    // As the plugins do: the read row goes back to the unread items.
-    feed.impl.markUnread = async (id) => {
-      feed.calls.push(['markUnread', id])
-      if (feed.throwOn === 'markUnread') throw new Error('chat: Google refused')
-      const at = feed.recent.findIndex((it) => it.id === id)
-      if (at < 0) throw new Error('chat: unknown id')
-      const [it] = feed.recent.splice(at, 1)
-      feed.items = [{ ...it, unread: true }, ...feed.items]
-    }
-  }
-  if (opts.markRead !== false) {
-    feed.impl.markRead = async (id) => {
-      feed.calls.push(['markRead', id])
-    }
-  }
-  return feed
-}
 
 /** A v2 FeedItem (design-v2 "The item") as a provider emits it. */
 function item2(id, o = {}) {
@@ -103,7 +27,7 @@ function item2(id, o = {}) {
  * A fake `inbox-feed` v2 provider: `snapshot()` answers `{ items: feed.items, state, message, asOf }`.
  * `feed.hold()` makes the next snapshot wait until the returned `release()` is called, answering what
  * `feed.items` held when the snapshot was asked (a snapshot that resolves late, after newer events).
- * `feed.throwOn` = 'snapshot' | 'describe' makes that call reject.
+ * `feed.throwOn` = 'snapshot' | 'describe' | 'act' makes that call reject; `feed.actReply` is what `act` answers.
  */
 function fakeFeedV2(describe, items = [], opts = {}) {
   const feed = {
@@ -142,7 +66,8 @@ function fakeFeedV2(describe, items = [], opts = {}) {
       },
       async act(id, action) {
         feed.calls.push(['act', id, action])
-        return { ok: true }
+        if (feed.throwOn === 'act') throw new Error('act broke')
+        return feed.actReply || { ok: true }
       },
     },
   }
@@ -201,10 +126,6 @@ function fakeServices(ctx, opts) {
   ctx.emitFeed = (pluginId, event, data = {}) => {
     for (const l of eventListeners) if (l.event === event) queueMicrotask(() => l.fn(structuredClone(data), pluginId))
   }
-  const calListeners = []
-  ctx.emitCalendar = (event, data = {}) => {
-    for (const l of calListeners) if (l.event === event) queueMicrotask(() => l.fn(structuredClone(data)))
-  }
   const services = {
     useAll(name) {
       if (name !== 'inbox-feed') throw new Error(`plugin bronos.inbox does not declare service "${name}" in services.collects`)
@@ -222,22 +143,10 @@ function fakeServices(ctx, opts) {
       })
     },
     use(name) {
-      if (name !== 'calendar') throw new Error(`plugin bronos.inbox does not declare service "${name}" in services.uses`)
-      const h = handleOf(() => ctx.calendar && ctx.calendar.impl, 'bronos.calendar')
-      return new Proxy(h, {
-        get(target, prop) {
-          if (prop === 'on') {
-            return (event, fn) => {
-              const l = { event, fn }
-              calListeners.push(l)
-              return () => calListeners.splice(calListeners.indexOf(l), 1)
-            }
-          }
-          return target[prop]
-        },
-      })
+      if (name !== 'jev') throw new Error(`plugin bronos.inbox does not declare service "${name}" in services.uses`)
+      return handleOf(() => ctx.jev && ctx.jev.impl, 'bronos.jev')
     },
-    available: (name) => (name === 'calendar' ? Boolean(ctx.calendar) : name === 'inbox-feed' && providers.size > 0),
+    available: (name) => (name === 'jev' ? Boolean(ctx.jev) : name === 'inbox-feed' && providers.size > 0),
     provide() {
       throw new Error('Inbox provides nothing')
     },
@@ -246,34 +155,31 @@ function fakeServices(ctx, opts) {
     },
     caller: () => undefined,
   }
-  if (opts.old) delete services.useAll
+  if (opts.old || (opts.missing || []).includes('useAll')) delete services.useAll
   return services
 }
 
-/** A fake `calendar` provider (the design's calendar contract), recording calls. */
-function fakeCalendar(day = {}, upcoming = []) {
-  const cal = {
-    day: { date: '2026-11-03', events: [], tomorrow: { count: 0 }, state: 'ok', ...day },
-    upcoming,
+/**
+ * A fake `jev` provider: `grid(items, questions)` answers `score(item, question)` (default 0.9) for
+ * every item as a `noul` answer and records each call. `jev.fail` makes the next calls reject.
+ */
+function fakeJev(score = () => 0.9) {
+  const jev = {
     calls: [],
+    fail: false,
+    score,
     impl: {
-      async day(o) {
-        cal.calls.push(['day', o])
-        return cal.day
-      },
-      async upcoming(o) {
-        cal.calls.push(['upcoming', o])
-        return cal.upcoming.slice(0, (o && o.count) || 3)
-      },
-      async respond(id, answer) {
-        cal.calls.push(['respond', id, answer])
-      },
-      async open(id) {
-        cal.calls.push(['open', id])
+      async grid(items, questions) {
+        jev.calls.push({ items, questions })
+        if (jev.fail) throw new Error('jev: cap reached')
+        const [qid, q] = Object.entries(questions)[0]
+        const results = {}
+        for (const it of items) results[it.id] = { answers: { [qid]: { noul: jev.score(it, q.instructions) } } }
+        return { results, stats: {} }
       },
     },
   }
-  return cal
+  return jev
 }
 
 /** The app-wide store (ctx.appStorage), shared by two ctxs to play two windows. Calls are atomic, a get-then-set is not. */
@@ -303,9 +209,14 @@ function fakeAppStorage() {
   }
 }
 
-/** A ctx good enough for dist/host.js. `opts.old`: an app before 0.9.7 (no `useAll`). `opts.appStorage`: share one store. */
+/**
+ * A ctx good enough for dist/host.js. `opts.old`: an app before 0.10.0 (no `useAll`, `slots` or
+ * `overlay.buttons`); `opts.missing`: a list of those names to leave out one by one. `opts.appStorage`:
+ * share one store. `opts.jev`: a `fakeJev` provider (none by default).
+ */
 function fakeCtx(opts = {}) {
   const panelListeners = []
+  const actionListeners = []
   const ctx = {
     api: 1,
     pluginId: 'bronos.inbox',
@@ -316,7 +227,10 @@ function fakeCtx(opts = {}) {
     external: [],
     notes: [],
     schedules: [],
-    calendar: opts.calendar || null,
+    jev: opts.jev || null,
+    headers: [],
+    slotPlacements: [],
+    overlayButtons: new Map(),
     appStorage: opts.appStorage || fakeAppStorage(),
     storage: fakeAppStorage(),
     log: {
@@ -348,7 +262,37 @@ function fakeCtx(opts = {}) {
         panelListeners.push(fn)
         return () => {}
       },
+      header: (panel, spec) => ctx.headers.push(structuredClone(spec)),
+      onAction: (panel, fn) => {
+        actionListeners.push(fn)
+        return () => {}
+      },
+      slots: (panel, placements) => ctx.slotPlacements.push(structuredClone(placements)),
       show() {},
+    },
+    slots: {
+      onOpen() {
+        throw new Error('Inbox provides no slot')
+      },
+      available: async () => true,
+    },
+    overlay: {
+      buttons: (type, provider) => {
+        ctx.overlayButtons.set(type, provider)
+        return () => ctx.overlayButtons.delete(type)
+      },
+    },
+    settingsPage: {
+      onOpen: () => () => {},
+    },
+    /** The header action `id` clicked. */
+    clickAction(id) {
+      for (const fn of actionListeners) fn(id)
+    },
+    /** The overlay type buttons Inbox shows for an `inbox-item` overlay with this data. */
+    async buttonsFor(data, type = 'inbox-item') {
+      const provider = ctx.overlayButtons.get(type)
+      return provider ? provider(structuredClone({ type: { name: type, data }, title: 'An item', opener: 'bronos.mail' })) : []
     },
     async sendPanel(m) {
       for (const fn of panelListeners) await fn(structuredClone(m))
@@ -368,10 +312,13 @@ function fakeCtx(opts = {}) {
     },
   }
   ctx.services = fakeServices(ctx, opts)
+  const missing = opts.old ? ['slots', 'overlay.buttons'] : opts.missing || []
+  if (missing.includes('slots')) delete ctx.slots
+  if (missing.includes('overlay.buttons')) delete ctx.overlay.buttons
   return ctx
 }
 
 /** Let queued microtasks and promise continuations run. */
 const flush = () => new Promise((r) => setImmediate(r))
 
-module.exports = { NOW, HOUR, item, item2, fakeFeed, fakeFeedV2, fakeCalendar, fakeAppStorage, fakeCtx, flush, CHAT, MAIL, JIRA }
+module.exports = { NOW, HOUR, item2, fakeFeedV2, fakeJev, fakeAppStorage, fakeCtx, flush, CHAT, MAIL, JIRA }

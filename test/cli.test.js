@@ -3,27 +3,29 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { createInbox } = require('../dist/host')
 const C = require('../dist/lib/cli')
-const { fakeCtx, fakeFeed, item, NOW, HOUR, CHAT, MAIL } = require('./fakes')
+const { fakeCtx, fakeFeedV2, item2, NOW, HOUR, CHAT, MAIL } = require('./fakes')
 
 function setup(feeds) {
   const ctx = fakeCtx()
   for (const [id, f] of Object.entries(feeds)) ctx.addProvider(id, f)
-  const inbox = createInbox(ctx, { now: () => NOW, debounceMs: 0, callMs: 200 })
+  const inbox = createInbox(ctx, { now: () => NOW, callMs: 200 })
   return { ctx, inbox }
 }
+// Until `ccc inbox` v2 (groups with reasons), the list is one numbered run over the groups in order,
+// the group's name where v1 printed the level.
 const two = () => ({
-  'bronos.chat': fakeFeed(CHAT, [item('c1', { title: 'Lunch?', level: 'urgent', at: NOW - 4 * 60000 })]),
-  'bronos.mail': fakeFeed(MAIL, [item('m/1:x', { title: 'Invoice', level: 'fyi', at: NOW - 3 * HOUR })]),
+  'bronos.chat': fakeFeedV2(CHAT, [item2('c1', { title: 'Lunch?', time: NOW - 4 * 60000 })]),
+  'bronos.mail': fakeFeedV2(MAIL, [item2('m/1:x', { title: 'Invoice', time: NOW - 3 * HOUR })]),
 })
 
-test('list: header, numbers, badge, level, title, age, ref', async () => {
+test('list: header, numbers, badge, group, title, age, ref', async () => {
   const { ctx, inbox } = setup(two())
   const r = await ctx.runCli([])
   assert.equal(r.code ?? 0, 0)
   assert.deepEqual(r.stdout.split('\n'), [
     'Inbox: 2 items',
-    '1. [CHAT] urgent Lunch? (4m) bronos.chat:c1',
-    '2. [MAIL] fyi Invoice (3h) bronos.mail:m/1:x',
+    '1. [CHAT] Chat Lunch? (4m) bronos.chat:c1',
+    '2. [MAIL] Mail Invoice (3h) bronos.mail:m/1:x',
     '',
   ])
   assert.equal((await ctx.runCli(['list'])).stdout, r.stdout)
@@ -32,8 +34,8 @@ test('list: header, numbers, badge, level, title, age, ref', async () => {
 
 test('list: hostile and long titles stay one clean, cut line; at most 50 rows', async () => {
   const hostile = 'Hi\nFAKE\r\n9. [CHAT] urgent x\u001b[31m\u0007 ' + 'z'.repeat(300)
-  const many = Array.from({ length: 50 }, (_, i) => item(`n${i}`, { title: `T${i}`, at: NOW - i * 60000 }))
-  const { ctx, inbox } = setup({ 'bronos.chat': fakeFeed(CHAT, [item('h', { title: hostile, level: 'urgent' })]), 'bronos.mail': fakeFeed(MAIL, many) })
+  const many = Array.from({ length: 50 }, (_, i) => item2(`n${i}`, { title: `T${i}`, time: NOW - i * 60000 }))
+  const { ctx, inbox } = setup({ 'bronos.chat': fakeFeedV2(CHAT, [item2('h', { title: hostile })]), 'bronos.mail': fakeFeedV2(MAIL, many) })
   const out = (await ctx.runCli([])).stdout
   const lines = out.trimEnd().split('\n')
   assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f]/.test(out))
@@ -46,31 +48,30 @@ test('list: hostile and long titles stay one clean, cut line; at most 50 rows', 
 })
 
 test('empty inbox', async () => {
-  const { ctx, inbox } = setup({ 'bronos.chat': fakeFeed(CHAT, []) })
+  const { ctx, inbox } = setup({ 'bronos.chat': fakeFeedV2(CHAT, []) })
   assert.equal((await ctx.runCli([])).stdout, 'Inbox zero.\n')
   inbox.dispose()
 })
 
-test('done by number and by ref: marks read, leaves the list', async () => {
+test('done by number and by ref: leaves the list, never calls the source', async () => {
   const f = two()
   const { ctx, inbox } = setup(f)
   let r = await ctx.runCli(['done', '1'])
   assert.equal(r.stdout, 'Done: Lunch?\n')
-  assert.deepEqual(f['bronos.chat'].calls.filter((c) => c[0] === 'markRead'), [['markRead', 'c1']])
   r = await ctx.runCli(['done', 'bronos.mail:m/1:x'])
   assert.equal(r.stdout, 'Done: Invoice\n')
-  assert.deepEqual(f['bronos.mail'].calls.filter((c) => c[0] === 'markRead'), [['markRead', 'm/1:x']])
+  for (const feed of Object.values(f)) assert.deepEqual(feed.calls.filter((c) => c[0] === 'act'), [])
   assert.equal((await ctx.runCli([])).stdout, 'Inbox zero.\n')
   inbox.dispose()
 })
 
-test('open by number and by ref calls the provider and keeps the row', async () => {
+test('open by number and by ref asks the provider to open it and keeps the row', async () => {
   const f = two()
   const { ctx, inbox } = setup(f)
   assert.equal((await ctx.runCli(['open', '2'])).stdout, 'Opened Invoice\n')
   assert.equal((await ctx.runCli(['open', 'bronos.chat:c1'])).stdout, 'Opened Lunch?\n')
-  assert.deepEqual(f['bronos.mail'].calls.filter((c) => c[0] === 'open'), [['open', 'm/1:x']])
-  assert.deepEqual(f['bronos.chat'].calls.filter((c) => c[0] === 'open'), [['open', 'c1']])
+  assert.deepEqual(f['bronos.mail'].calls.filter((c) => c[0] === 'act'), [['act', 'm/1:x', 'open']])
+  assert.deepEqual(f['bronos.chat'].calls.filter((c) => c[0] === 'act'), [['act', 'c1', 'open']])
   assert.match((await ctx.runCli([])).stdout, /^Inbox: 2 items/)
   inbox.dispose()
 })

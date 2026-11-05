@@ -1,18 +1,36 @@
 'use strict'
+// The v1 settings view's form logic (panels/settingslogic.js), until the panel v2 replaces it. The
+// stored settings are written out here as Inbox 0.1.0 stored them: the v1 reader (lib/v1.js) is gone
+// with the v1 host, and the v2 host never saves this form's output (its settings are lib/settings.js).
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const L = require('../panels/settingslogic')
-const { readSettings, DEFAULTS } = require('../dist/lib/v1')
 
 const providers = [
   { pluginId: 'bronos.chat', label: 'Chat', color: 'green', kind: 'chat', markRead: true, on: true, items: 10, weight: 30, weightSet: false },
   { pluginId: 'bronos.jira', label: 'Jira', color: 'blue', kind: 'issues', markRead: false, on: true, items: 5, weight: 12, weightSet: true },
 ]
-const stored = readSettings({ sources: { 'bronos.jira': { on: true, items: 5, weight: 12 }, 'bronos.gone': { on: false, items: 4, weight: 7 } }, ageCap: 99 })
+const stored = {
+  sources: { 'bronos.jira': { on: true, items: 5, weight: 12 }, 'bronos.gone': { on: false, items: 4, weight: 7 } },
+  levels: { urgent: 300, action: 150, fyi: 50 },
+  unread: 10,
+  direct: 20,
+  due: 25,
+  agePerHour: 5,
+  ageCap: 99,
+  readItems: 20,
+  dedupeJira: true,
+  doneReturns: true,
+  notifySnooze: true,
+  afternoon: '14:00',
+  morning: '09:00',
+  badge: 'urgent',
+  calendar: { position: 'top', upcoming: 3, pinMinutes: 30, timeline: 'auto' },
+}
 const formOf = (over = {}) => ({
   sources: { 'bronos.chat': { on: true, items: '10', weight: '30' }, 'bronos.jira': { on: true, items: '5', weight: '12' } },
   levels: { urgent: '300', action: '150', fyi: '50' }, unread: '10', direct: '20', due: '25', agePerHour: '5',
-  dedupeJira: true, doneMarksRead: true, doneReturns: true, notifySnooze: true, afternoon: '14:00', morning: '09:00', badge: 'urgent',
+  dedupeJira: true, doneReturns: true, notifySnooze: true, afternoon: '14:00', morning: '09:00', badge: 'urgent',
   calendar: { position: 'top', upcoming: '3', pinMinutes: '30', timeline: 'auto' }, ...over,
 })
 
@@ -26,10 +44,9 @@ test('form model: live providers, then a provider that left, greyed', () => {
   assert.equal(rows[2].on, false)
 })
 
-test('an untouched form round-trips through readSettings unchanged', () => {
+test('an untouched form gives the stored settings back, plus the new row', () => {
   const out = L.formToSettings(stored, providers, formOf())
-  assert.deepEqual(readSettings(out), out)
-  assert.deepEqual(out, { ...stored, sources: { ...stored.sources, 'bronos.chat': { on: true } } }) // only the new row
+  assert.deepEqual(out, { ...stored, sources: { ...stored.sources, 'bronos.chat': { on: true } } })
   assert.equal(out.ageCap, 99)
   assert.deepEqual(out.sources['bronos.gone'], { on: false, items: 4, weight: 7 })
 })
@@ -44,25 +61,20 @@ test('weights: empty drops, a changed value is stored, the default shown is not'
   f.sources['bronos.chat'].items = '7'
   out = L.formToSettings(stored, providers, f)
   assert.equal(out.sources['bronos.chat'].items, 7)
-  assert.deepEqual(readSettings(out), out)
 })
 
-test('bad input: the host refuses it, the form function never makes a stray key', () => {
-  const f = formOf({ calendar: { position: 'left', upcoming: '99', pinMinutes: '30', timeline: 'auto' } })
+test('bad input: a bad number keeps the stored value, no stray key is made', () => {
+  const f = formOf({ calendar: { position: 'left', upcoming: 'x', pinMinutes: '30', timeline: 'auto' } })
   f.sources['bronos.chat'].weight = 'abc'
-  f.sources['bronos.chat'].items = '99'
   f.levels.urgent = 'x'
   const out = L.formToSettings(stored, providers, f)
   assert.equal(out.sources['bronos.chat'].weight, undefined) // not a number: nothing stored
   assert.equal(out.levels.urgent, 300) // stored value kept
-  const read = readSettings(out)
-  assert.equal(read.calendar.position, DEFAULTS.calendar.position) // "left" replaced by the default
-  assert.equal(read.calendar.upcoming, DEFAULTS.calendar.upcoming) // 99 out of range
-  assert.equal(read.sources['bronos.chat'].items, undefined) // 99 out of 1..50: the kind's default
+  assert.equal(out.calendar.upcoming, 3)
   const keys = (o) => Object.keys(o).sort().join()
-  assert.equal(keys(out), keys(read))
-  assert.equal(keys(out.calendar), keys(read.calendar))
-  assert.equal(keys(out.levels), keys(read.levels))
+  assert.equal(keys(out), keys(stored))
+  assert.equal(keys(out.calendar), keys(stored.calendar))
+  assert.equal(keys(out.levels), keys(stored.levels))
 })
 
 test('parseInt10 takes whole numbers only', () => {

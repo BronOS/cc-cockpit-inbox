@@ -362,4 +362,5 @@ module.exports = {
   placeItem,
   traceItem,
   placeAll,
+  byTime,
 }

@@ -22,12 +22,12 @@ const walkFiles = (dirs, ext) => {
   for (const d of dirs) walk(path.join(ROOT, d))
   return out
 }
-const sources = () => walkFiles(['dist', 'panels'], ['.js'])
+const sources = () => walkFiles(['dist', 'panels', 'settings'], ['.js'])
 const noComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-test('the manifest: id, api, entry points exist, the CLI, the panel', () => {
+test('the manifest: id, api, entry points exist, the CLI, the panel with the agenda slot, the settings page', () => {
   assert.equal(manifest.id, 'bronos.inbox')
-  assert.equal(manifest.version, '0.1.0')
+  assert.equal(manifest.version, '0.2.0')
   assert.equal(manifest.api, 1)
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.author, 'Oleg Bronzov')
@@ -37,16 +37,21 @@ test('the manifest: id, api, entry points exist, the CLI, the panel', () => {
   assert.equal(panel.defaultZone, 'right')
   assert.ok(fs.existsSync(path.join(ROOT, panel.entry)))
   assert.ok(fs.existsSync(path.join(ROOT, panel.icon)))
+  assert.deepEqual(panel.slots, ['agenda'])
+  assert.equal(manifest.contributes.slots, undefined, 'Inbox places the agenda slot, Calendar provides it')
   assert.deepEqual(manifest.contributes.cli.map((c) => c.name), ['inbox'])
-  assert.match(manifest.description, /cc-cockpit 0\.9\.7/)
+  assert.match(manifest.description, /cc-cockpit 0\.10\.0/)
+  const page = manifest.contributes.settings.page
+  assert.deepEqual(page, { entry: 'settings/index.html', scopes: ['app'] })
+  assert.ok(fs.existsSync(path.join(ROOT, page.entry)))
+  assert.equal(manifest.contributes.settings.app, undefined, 'no schema form: the rules editor is the page')
 })
 
-test('services: uses inbox-feed and calendar, collects inbox-feed (a subset of uses), provides nothing', () => {
-  assert.deepEqual(manifest.services.uses, { 'inbox-feed': 1, calendar: 1 })
+test('services: uses inbox-feed 2 and jev 1 (no calendar), collects inbox-feed (a subset of uses), provides nothing', () => {
+  assert.deepEqual(manifest.services.uses, { 'inbox-feed': 2, jev: 1 })
   assert.deepEqual(manifest.services.collects, ['inbox-feed'])
   for (const name of manifest.services.collects) assert.ok(Object.hasOwn(manifest.services.uses, name), name)
   assert.equal(manifest.services.provides, undefined)
-  assert.equal(manifest.contributes.settings, undefined, 'settings live in the panel: the sources are dynamic')
 })
 
 test('no dependency, no exec, no network, no secrets or OAuth', () => {
