@@ -27,6 +27,7 @@ const page = {
   error: null,
   status: '',
   tests: {},
+  sent: null,
   fatal: null,
 }
 const PALETTE = ['green', 'red', 'blue', 'amber', 'violet', 'grey']
@@ -105,6 +106,7 @@ function renderBar() {
     btn('Save', () => {
       page.status = 'Saving…'
       renderBar()
+      page.sent = page.draft
       ccPanel.post({ type: 'save', settings: page.draft })
     }, { cls: 'cc-primary', f: 'save', disabled: !dirty })
   )
@@ -218,7 +220,8 @@ const findRuleIn = (id) => page.draft.rules.find((r) => r.id === id)
 function testEl(rule) {
   const box = el('div', { class: 'test' },
     btn('Test', () => {
-      page.tests[rule.id] = { asking: true }
+      // The draft rides along: a reply for an older draft is dropped (edit() clears the results).
+      page.tests[rule.id] = { asking: true, draft: page.draft }
       later()
       ccPanel.post({ type: 'test', settings: page.draft, ruleId: rule.id })
     }, { f: `r:${rule.id}:test`, title: 'How many of the items in the Inbox now this rule would place, with five examples (Jev: cached answers only, never a new question)' }))
@@ -382,7 +385,10 @@ ccPanel.onMessage((m) => {
     page.jevOn = m.jev === true
     // A save's answer, or nothing edited yet: the draft is what is stored now. Edits in progress are
     // kept over a later read (the sources arriving).
-    if (m.saved === true || wasClean) page.draft = draftOf(m.settings)
+    // A draft edited since Save was pressed stays (only the stored copy moves on).
+    const editedSince = m.saved === true && page.sent && page.draft && isDirty(page.draft, page.sent)
+    if ((m.saved === true && !editedSince) || wasClean) page.draft = draftOf(m.settings)
+    if (m.saved === true) page.sent = null
     if (m.saved === true) {
       page.status = 'Saved'
       page.error = null
@@ -393,6 +399,8 @@ ccPanel.onMessage((m) => {
     page.error = `Not saved: ${String(m.reason || 'refused')}`
     render()
   } else if (m.type === 'test' && typeof m.ruleId === 'string') {
+    const pending = page.tests[m.ruleId]
+    if (!pending || !pending.asking || pending.draft !== page.draft) return
     page.tests[m.ruleId] = m.result && typeof m.result === 'object' ? m.result : { ok: false, reason: 'no answer' }
     render()
   } else if (m.type === 'fatal') {

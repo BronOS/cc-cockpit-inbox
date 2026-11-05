@@ -173,6 +173,7 @@ test('what the page says: summaries, notes, test results, source rows, dirty', (
   assert.equal(L.sourceRow({ pluginId: 'p.chat', state: 'ok', count: 0 }).problem, false)
   assert.equal(L.isDirty(L.draftOf(d), d), false)
   assert.equal(L.isDirty(L.setAgenda(d, 'off'), d), true)
+  assert.equal(L.isDirty({ a: 1, b: { x: 1, y: 2 } }, { b: { y: 2, x: 1 }, a: 1 }), false)
   assert.equal(L.setAgenda(d, 'beside'), d)
 })
 

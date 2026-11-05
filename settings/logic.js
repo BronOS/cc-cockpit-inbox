@@ -46,7 +46,15 @@ function draftOf(settings) {
 
 /** Whether the draft differs from what is stored. */
 function isDirty(draft, saved) {
-  return JSON.stringify(draft) !== JSON.stringify(saved)
+  return canonical(draft) !== canonical(saved)
+}
+
+/** JSON text with object keys sorted: toggling a field off and on moves its key, which is no change. */
+function canonical(v) {
+  return JSON.stringify(v, (_k, x) =>
+    x && typeof x === 'object' && !Array.isArray(x)
+      ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]]))
+      : x)
 }
 
 /** The smallest `<prefix><n>` not in `used` (ids the host accepts: a letter first, then letters and digits). */
