@@ -788,7 +788,7 @@ function createInbox(ctx, opts = {}) {
         try {
           await act({ type: 'undo' })
         } catch (e) {
-          return { stderr: `undo failed: ${why(e)}\n`, code: 1 }
+          return { stderr: `undo failed: ${CLI.oneLine(why(e), 300)}\n`, code: 1 }
         }
         return { stdout: `Undone: ${CLI.oneLine(label, CLI.MAX_TITLE + 20)}\n` }
       }
@@ -821,7 +821,7 @@ function createInbox(ctx, opts = {}) {
         await act({ type: 'snooze', key: row.key, choice: p.choice })
         return { stdout: `Snoozed until ${until === null ? 'it changes' : CLI.when(until)}: ${title}\n` }
       } catch (e) {
-        return { stderr: `${p.cmd} failed: ${why(e)}\n`, code: 1 }
+        return { stderr: `${p.cmd} failed: ${CLI.oneLine(why(e), 300)}\n`, code: 1 }
       }
     })
     disposers.push(unregister)

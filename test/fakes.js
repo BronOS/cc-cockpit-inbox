@@ -66,7 +66,7 @@ function fakeFeedV2(describe, items = [], opts = {}) {
       },
       async act(id, action) {
         feed.calls.push(['act', id, action])
-        if (feed.throwOn === 'act') throw new Error('act broke')
+        if (feed.throwOn === 'act') throw new Error(feed.throwMessage || 'act broke')
         return feed.actReply || { ok: true }
       },
     },

@@ -217,3 +217,27 @@ test('parse: the new commands', () => {
   assert.deepEqual(C.parse(['why', '3']), { cmd: 'why', target: '3' })
   assert.deepEqual(C.parse(['act', 'a:b', 'markRead']), { cmd: 'act', target: 'a:b', action: 'markRead' })
 })
+
+const CTRL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩​-‏]/
+
+test('why and act failures: control, bidi and C1 bytes from item values or a source error never reach the terminal', async () => {
+  const bad = 'x\u001b]0;pwn\u0007\u009b31m‮evil​'
+  const f = {
+    'bronos.chat': fakeFeedV2(CHAT, [item2('c1', { title: bad, preview: bad, from: { name: bad, address: bad }, actions: [{ id: 'markRead', label: 'Mark read' }] })]),
+  }
+  const { ctx, inbox } = setup(f)
+  const w = await ctx.runCli(['why', '1'])
+  assert.doesNotMatch(w.stdout, CTRL)
+  f['bronos.chat'].throwOn = 'act'
+  f['bronos.chat'].throwMessage = `boom ${bad}`
+  const r = await ctx.runCli(['act', '1', 'markRead'])
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /failed: boom/)
+  assert.doesNotMatch(r.stderr.replace(/\n$/, ''), CTRL)
+  assert.equal(r.stderr.trimEnd().split('\n').length, 1)
+  inbox.dispose()
+})
+
+test('oneLine strips bidi overrides, isolates and zero-width characters', () => {
+  assert.equal(C.oneLine('a‮b⁦c​d﻿e', 20), 'a b c d e')
+})

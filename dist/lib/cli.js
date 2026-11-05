@@ -27,10 +27,10 @@ const HELP = `ccc inbox: the list of what needs you, in groups by your rules (br
 row (<pluginId>:<id>).
 `
 
-/** One line, no control characters (C0, DEL, C1, line and paragraph separators), cut to \`max\`. */
+/** One line, no control characters (C0, DEL, C1, line and paragraph separators, zero-width and bidi controls), cut to \`max\`. */
 function oneLine(s, max) {
   const t = String(s == null ? '' : s)
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return t.length > max ? `${t.slice(0, max - 1)}…` : t

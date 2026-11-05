@@ -33,8 +33,10 @@ An ordered list; for each item the first enabled rule that holds puts it in its 
 goes to Rest. A rule is either **conditions** (all must hold) or **one Jev question with a
 threshold** (conditions before it act as a filter, so Jev is asked only for what passes). Fields:
 `source`, `sourceKind`, `title`, `preview`, `from.name`, `from.address`, `to`, `mentionsMe`, `read`,
-`place.kind|name|status`, `labels`, `time`. Text compares case-insensitively with `is`, `contains`,
-`startsWith`, `endsWith`, `in` and their negations; there are no regular expressions.
+`place.kind|name|status`, `labels`, `time`. Text compares case-insensitively; each field has its own operators:
+`is`, `contains`, `startsWith`, `endsWith` and `in` (not all on every field), `isNot` on `source` and
+`sourceKind`, `notContains` on `title` and `preview`, `has`, `hasNot` and `hasPrefix` on `labels`,
+`newerThan` and `olderThan` (minutes) on `time`; there are no regular expressions.
 
 Jev answers are cached per question and item version (a new message asks again). While one is
 pending the row says "Jev…" and moves at most once when the answer comes; with Jev unavailable the
