@@ -216,26 +216,39 @@ function syncOf(raw) {
   return { items, state: STATES.has(state) ? state : 'ok', ...(message ? { message } : {}), asOf: posTime(own(raw, 'asOf')), refused, overCap }
 }
 
-/** A `gone` event's data `{ ids }`: `{ ids, refused, overCap }`, at most 500 ids, bad ones counted, duplicates folded. */
+/**
+ * A `gone` event's data `{ ids }`: `{ ids, refused, overCap }`, 1-500 ids. Bad ids are counted in `refused`
+ * (an empty or missing list counts 1: the event carried nothing usable), duplicates are folded, and only valid
+ * unique ids past the 500th count in `overCap`. The scan stops after 4 times the cap (the rest is counted
+ * `refused`, not parsed) so a hostile huge array costs bounded work.
+ */
 function goneOf(raw) {
-  const list = isObj(raw) && Array.isArray(own(raw, 'ids')) ? own(raw, 'ids') : []
+  const ok = isObj(raw) && Array.isArray(own(raw, 'ids'))
+  const list = ok ? own(raw, 'ids') : []
   const seen = new Set()
   const ids = []
-  let refused = isObj(raw) && Array.isArray(own(raw, 'ids')) ? 0 : 1
+  let refused = ok && list.length > 0 ? 0 : 1
   let overCap = 0
-  for (const v of list) {
-    if (ids.length >= CAPS.gone) {
-      overCap++
-      continue
-    }
-    const id = idText(v, CAPS.id)
+  const scan = Math.min(list.length, CAPS.gone * 4)
+  refused += list.length - scan
+  for (let i = 0; i < scan; i++) {
+    const id = idText(list[i], CAPS.id)
     if (!id) refused++
     else if (!seen.has(id)) {
       seen.add(id)
-      ids.push(id)
+      if (ids.length < CAPS.gone) ids.push(id)
+      else overCap++
     }
   }
   return { ids, refused, overCap }
+}
+
+/** `act()`'s answer: `{ ok: true }` or `{ ok: false, message? }` with the message one line, at most 300 characters. Junk is a failure. */
+function actReplyOf(raw) {
+  if (!isObj(raw) || typeof own(raw, 'ok') !== 'boolean') return { ok: false, message: 'the source answered something Inbox cannot read' }
+  if (own(raw, 'ok')) return { ok: true }
+  const message = line(own(raw, 'message'), CAPS.message)
+  return { ok: false, ...(message ? { message } : {}) }
 }
 
 /** One CalEvent, or null. `meetUrl` only when it is an https URL. */
@@ -295,9 +308,19 @@ function calUpcomingOf(raw) {
   return raw.slice(0, CAPS.upcoming).map(eventOf).filter(Boolean).sort((a, b) => a.start - b.start)
 }
 
-/** `features()`'s answer as a set of known names. */
+/**
+ * `features()`'s answer as a set of plain one-line strings (feed v2 defines no names, so later additions
+ * pass through): each at most 40 characters, at most 32 of them.
+ */
 function featuresOf(raw) {
-  return new Set(Array.isArray(raw) ? raw.filter((f) => f === 'markRead' || f === 'recent' || f === 'markUnread') : [])
+  const out = new Set()
+  if (!Array.isArray(raw)) return out
+  for (const f of raw.slice(0, 256)) {
+    const t = line(f, CAPS.labelLen)
+    if (t) out.add(t)
+    if (out.size >= 32) break
+  }
+  return out
 }
 
-module.exports = { CAPS, describeOf, itemOf, syncOf, goneOf, itemsOf, eventOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl }
+module.exports = { CAPS, describeOf, itemOf, syncOf, goneOf, actReplyOf, itemsOf, eventOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl }

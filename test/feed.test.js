@@ -1,7 +1,7 @@
 'use strict'
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { CAPS, describeOf, itemOf, syncOf, goneOf, itemsOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl } = require('../dist/lib/feed')
+const { CAPS, describeOf, itemOf, syncOf, goneOf, itemsOf, calDayOf, calUpcomingOf, featuresOf, actReplyOf, httpsUrl } = require('../dist/lib/feed')
 const { item, NOW, HOUR } = require('./fakes')
 
 test('describeOf keeps a good answer and falls back on junk', () => {
@@ -79,7 +79,9 @@ test('calendar upcoming: capped at 20, junk is empty', () => {
 })
 
 test('features and URLs', () => {
-  assert.deepEqual([...featuresOf(['markRead', 'other'])], ['markRead'])
+  assert.deepEqual([...featuresOf(['markRead', 'other', 5, '', 'markRead', 'a\nb'])], ['markRead', 'other', 'a b'])
+  assert.equal(featuresOf(Array.from({ length: 100 }, (_, i) => `f${i}`)).size, 32)
+  assert.equal([...featuresOf(['x'.repeat(100)])][0].length, CAPS.labelLen)
   assert.deepEqual([...featuresOf('x')], [])
   assert.equal(httpsUrl('http://example.com'), null)
   assert.equal(httpsUrl(`https://example.com/${'x'.repeat(2100)}`), null)
@@ -222,4 +224,25 @@ test('goneOf: ids are validated, deduplicated and capped at 500, with counts', (
   assert.equal(many.overCap, 20)
   for (const bad of [null, 'a', 5, {}, { ids: 'a' }]) assert.deepEqual(goneOf(bad), { ids: [], refused: 1, overCap: 0 })
   assert.deepEqual(goneOf(JSON.parse('{"__proto__":{"ids":["a"]}}')).ids, [])
+})
+
+test('goneOf: empty list refused, over-cap counts only valid unique ids, scan is bounded', () => {
+  assert.deepEqual(goneOf({ ids: [] }), { ids: [], refused: 1, overCap: 0 })
+  const mixed = goneOf({ ids: [...Array.from({ length: 500 }, (_, i) => `i${i}`), '', 5, 'i0', 'i499', 'extra'] })
+  assert.equal(mixed.ids.length, 500)
+  assert.deepEqual([mixed.refused, mixed.overCap], [2, 1])
+  const huge = goneOf({ ids: Array.from({ length: 5000 }, (_, i) => `i${i % 600}`) })
+  assert.equal(huge.ids.length, 500)
+  assert.equal(huge.overCap, 100)
+  assert.equal(huge.refused, 3000)
+})
+
+test('actReplyOf: ok, failure message capped to one line of 300, junk is a failure', () => {
+  assert.deepEqual(actReplyOf({ ok: true, extra: 1 }), { ok: true })
+  assert.deepEqual(actReplyOf({ ok: false }), { ok: false })
+  const r = actReplyOf({ ok: false, message: `a\nb${'x'.repeat(400)}` })
+  assert.equal(r.ok, false)
+  assert.equal(r.message.length, CAPS.message)
+  assert.ok(!r.message.includes('\n'))
+  for (const bad of [null, 'ok', { ok: 'yes' }, [], {}]) assert.equal(actReplyOf(bad).ok, false)
 })
