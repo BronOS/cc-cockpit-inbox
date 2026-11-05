@@ -9,7 +9,7 @@ const CAPS = { perSource: 1000, gone: 500, id: 200, rev: 100, preview: 1000, nam
 const COLORS = new Set(['green', 'red', 'blue', 'amber', 'violet', 'grey'])
 const KINDS = new Set(['chat', 'mail', 'issues', 'other'])
 const STATES = new Set(['ok', 'signedOut', 'error'])
-const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+const { isObj } = require('./util')
 /** A one-line string cut to `max` (control characters and newlines become spaces), or null. */
 function text(v, max) {
   if (typeof v !== 'string') return null

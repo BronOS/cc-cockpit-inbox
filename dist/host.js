@@ -32,7 +32,8 @@ const { actReplyOf } = require('./lib/feed')
 const { createSources } = require('./lib/sources')
 const { createJev } = require('./lib/jev')
 const { createState, untilOf } = require('./lib/state')
-const { placeItem, traceItem, checkRule, keyOf, byTime, REST, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./lib/rules')
+const { isObj, why, withTimeout, keyOf, SNOOZE_CHOICES, DEFAULT_TIMES } = require('./lib/util')
+const { placeItem, traceItem, checkRule, byTime, REST, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./lib/rules')
 const { search } = require('./lib/search')
 const S = require('./lib/settings')
 const CLI = require('./lib/cli')
@@ -68,9 +69,8 @@ const MAX_QUERY = 200
 // in the last 15 minutes, and at most 3 a refresh (the app caps notifications at 10 a minute).
 const NOTIFY_WITHIN_MS = 15 * 60000
 const NOTIFY_MAX = 3
-const SNOOZES = new Set(['1h', 'afternoon', 'tomorrow', 'changes'])
-// v1's default times (v1 had a setting for them; v2's settings hold groups, rules and the agenda only).
-const SNOOZE_TIMES = { afternoon: '14:00', morning: '09:00' }
+const SNOOZES = new Set(SNOOZE_CHOICES)
+const SNOOZE_TIMES = DEFAULT_TIMES
 // The settings page's "Test": examples shown, and their titles cut (the page draws text only).
 const TEST_EXAMPLES = 5
 const TEST_TITLE = 120
@@ -78,27 +78,39 @@ const TEST_TITLE = 120
 // like the settings. A panel page has an opaque origin (no localStorage), so the host keeps it:
 // `{ <group id>: true | false }`, only ids of groups that exist, at most one per group cap.
 const OPEN_KEY = 'ui:groupsOpen'
-const GROUP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/
+const GROUP_ID = S.ID
 const FULL_FIT = Object.freeze({ rows: ROWS_SHOWN, preview: PREVIEW_SHOWN })
 const OLD_APP = 'Inbox 0.2.0 needs cc-cockpit 0.10.0 or newer (slots, overlay buttons and the services collector). Update the app.'
 
 // What a failed panel action is called in its notice: the button's words, not the message type.
 const ACTION_NAMES = { open: 'Open', done: 'Done', snooze: 'Snooze', undo: 'Undo', restore: 'Back to Inbox', refresh: 'Refresh', act: 'That action' }
 
-const why = (e) => String((e && e.message) || e || 'failed').slice(0, 300)
-const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 const cut = (s, max) => (typeof s === 'string' && s.length > max ? `${s.slice(0, max - 1)}…` : s)
 
-/** `p`, or a rejection after `ms` (a provider that never answers must not hold an action). */
-function withTimeout(p, ms, what) {
-  let t
-  return Promise.race([
-    Promise.resolve(p).finally(() => clearTimeout(t)),
-    new Promise((_, reject) => {
-      t = setTimeout(() => reject(new Error(`${what} did not answer in ${Math.round(ms / 1000)} s`)), ms)
-    }),
-  ])
-}
+/** What the editor needs to offer only what a save accepts: fields, ops, value kinds and caps. */
+const TABLE = Object.freeze({
+  fields: FIELDS,
+  kinds: KINDS,
+  to: TO,
+  rest: REST,
+  agenda: S.AGENDA,
+  caps: { ...S.CAPS, in: MAX_IN, value: MAX_VALUE, minutes: MAX_MINUTES },
+})
+
+/** The unread rule (`read: null` is no read state and does not count): the groups' counts and the badge. */
+const isUnread = (item) => item.read === false
+
+/** The part of a source's line both the panel and the settings page show (the host adds its own extras). */
+const sourceLine = (s) => ({
+  pluginId: s.pluginId,
+  label: s.desc.label,
+  badge: s.desc.badge,
+  color: s.desc.color,
+  kind: s.desc.kind,
+  ...(s.desc.scope ? { scope: s.desc.scope } : {}),
+  state: s.state,
+  count: s.items.length,
+})
 
 /** Does this app have what Inbox 0.2.0 builds on (0.10.0: the collector, slots, overlay type buttons)? */
 function appIsNew(ctx) {
@@ -119,6 +131,14 @@ function createInbox(ctx, opts = {}) {
   const callMs = opts.callMs ?? CALL_MS
   const disposers = []
   let disposed = false
+  // A throwing disposer must not keep the others from running.
+  const disposeAll = () => {
+    for (const d of disposers) {
+      try {
+        if (typeof d === 'function') d()
+      } catch {}
+    }
+  }
 
   if (!appIsNew(ctx)) {
     // An older app may still load Inbox (it ignores manifest keys it does not know): say what to do.
@@ -129,7 +149,7 @@ function createInbox(ctx, opts = {}) {
       fatal()
     } catch {}
     const nothing = async () => {}
-    return { first: Promise.resolve(), tick: nothing, refresh: nothing, act: nothing, saveSettings: nothing, dispose: () => disposers.forEach((d) => typeof d === 'function' && d()) }
+    return { first: Promise.resolve(), tick: nothing, refresh: nothing, act: nothing, saveSettings: nothing, dispose: disposeAll }
   }
 
   const call = (p, what) => withTimeout(p, callMs, what)
@@ -306,7 +326,7 @@ function createInbox(ctx, opts = {}) {
       collapsed: g.collapsed,
       badge: g.badge,
       count: g.rows.length,
-      unread: g.rows.filter((r) => r.item.read === false).length,
+      unread: g.rows.filter((r) => isUnread(r.item)).length,
       rows: g.rows.slice(0, fit.rows).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, back: r.back }, fit)),
     }))
     const shownBy = new Map()
@@ -319,13 +339,7 @@ function createInbox(ctx, opts = {}) {
       updatedAt,
       groups,
       sources: view.list.map((s) => ({
-        pluginId: s.pluginId,
-        label: s.desc.label,
-        badge: s.desc.badge,
-        color: s.desc.color,
-        kind: s.desc.kind,
-        ...(s.desc.scope ? { scope: s.desc.scope } : {}),
-        state: s.state,
+        ...sourceLine(s),
         message: s.message,
         error: s.error,
         stale: s.stale,
@@ -333,7 +347,6 @@ function createInbox(ctx, opts = {}) {
         loaded: s.loaded,
         refused: s.refused,
         overCap: s.overCap,
-        count: s.items.length,
         shown: shownBy.get(s.pluginId) || 0,
       })),
       done: {
@@ -370,7 +383,7 @@ function createInbox(ctx, opts = {}) {
   /** The panel badge: unread items in the groups marked `badge` (`read: null`, no read state, does not count). */
   function badgeOf() {
     let n = 0
-    for (const g of view.groups) if (g.badge) for (const r of g.rows) if (r.item.read === false) n++
+    for (const g of view.groups) if (g.badge) for (const r of g.rows) if (isUnread(r.item)) n++
     return n > 0 ? n : null
   }
 
@@ -538,7 +551,7 @@ function createInbox(ctx, opts = {}) {
       const t = now()
       build(t)
       const listed = [...view.live.values()].map((it) => ({ pluginId: it.source, id: it.id }))
-      await state.touch(listed, t).catch(() => {})
+      await state.touch(listed, t).catch((e) => ctx.log.warn(`touch: ${why(e)}`))
       await state.prune(t).catch((e) => ctx.log.warn(`prune: ${why(e)}`))
       await jev.prune().catch((e) => ctx.log.warn(`jev prune: ${why(e)}`))
       await announceWoken(t)
@@ -582,7 +595,7 @@ function createInbox(ctx, opts = {}) {
     return it
   }
 
-  /** Snooze in Inbox's memory only. Resolves the item, or null when there is none to snooze (or no such choice). */
+  /** Snooze in Inbox's memory only. Resolves `{ item, until }` (the time that was stored), or null when there is none to snooze (or no such choice). */
   async function snoozeItem(key, choice) {
     const it = visibleByKey(key)
     if (!it || !SNOOZES.has(choice)) return null
@@ -590,7 +603,7 @@ function createInbox(ctx, opts = {}) {
     const until = untilOf(choice, t, SNOOZE_TIMES)
     setUndo(await state.snooze(memoryRow(it), until, t), `Snoozed: ${it.title}`, t)
     publish()
-    return it
+    return { item: it, until }
   }
 
   /**
@@ -645,10 +658,9 @@ function createInbox(ctx, opts = {}) {
       case 'done':
         await markDone(m.key)
         return
-      case 'snooze': {
+      case 'snooze':
         await snoozeItem(m.key, m.choice)
         return
-      }
       case 'undo':
         if (lastUndo) {
           const { token } = lastUndo
@@ -709,29 +721,9 @@ function createInbox(ctx, opts = {}) {
 
   // ---- the settings page ----
 
-  /** What the editor needs to offer only what a save accepts: fields, ops, value kinds and caps. */
-  const TABLE = Object.freeze({
-    fields: FIELDS,
-    kinds: KINDS,
-    to: TO,
-    rest: REST,
-    agenda: S.AGENDA,
-    caps: { ...S.CAPS, in: MAX_IN, value: MAX_VALUE, minutes: MAX_MINUTES },
-  })
-
   /** The sources as the page lists them (read-only): label, kind, scope, state, item count. */
   function pageSources() {
-    return sources.list().map((s) => ({
-      pluginId: s.pluginId,
-      label: s.desc.label,
-      badge: s.desc.badge,
-      color: s.desc.color,
-      kind: s.desc.kind,
-      ...(s.desc.scope ? { scope: s.desc.scope } : {}),
-      state: s.state,
-      ...(s.message ? { message: s.message } : {}),
-      count: s.items.length,
-    }))
+    return sources.list().map((s) => ({ ...sourceLine(s), ...(s.message ? { message: s.message } : {}) }))
   }
 
   /**
@@ -759,7 +751,7 @@ function createInbox(ctx, opts = {}) {
     for (const [key, item] of view.live) {
       if (state.status(item, t).hidden) continue
       total++
-      const r = checkRule(rule, item, { kind: kindOf(item.source), now: t, jevAnswer: jev.cachedAnswer })
+      const r = checkRule(rule, item, { ...o, kind: kindOf(item.source) })
       if (r.result === 'held') holds++
       else if (r.result === 'pending') pending++
       const p = placeItem(tried, item, o)
@@ -781,7 +773,7 @@ function createInbox(ctx, opts = {}) {
     }
   }
 
-  const testId = (m) => (typeof m.ruleId === 'string' ? m.ruleId.slice(0, 40) : '')
+  const testId = (m) => (typeof m.ruleId === 'string' ? m.ruleId.slice(0, S.MAX_ID_LENGTH) : '')
 
   function onSettingsPage(page) {
     const send = (m) => {
@@ -872,7 +864,7 @@ function createInbox(ctx, opts = {}) {
       if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now()) }
       if (p.cmd === 'undo') {
         // Same window as the panel's toast: after it the entry is not offered any more.
-        if (!lastUndo || now() >= lastUndo.until) return { stderr: 'Nothing to undo (undo lasts 6 seconds after a done or snooze).\n', code: 1 }
+        if (!lastUndo || now() >= lastUndo.until) return { stderr: `Nothing to undo (undo lasts ${UNDO_MS / 1000} seconds after a done or snooze).\n`, code: 1 }
         const { label } = lastUndo
         try {
           await act({ type: 'undo' })
@@ -908,8 +900,9 @@ function createInbox(ctx, opts = {}) {
           if (!(await markDone(row.key))) return { stderr: 'That item is no longer in the list: run `ccc inbox list` again.\n', code: 1 }
           return { stdout: `Done: ${title}\n` }
         }
-        const until = untilOf(p.choice, now(), SNOOZE_TIMES)
-        if (!(await snoozeItem(row.key, p.choice))) return { stderr: 'That item is no longer in the list: run `ccc inbox list` again.\n', code: 1 }
+        const snoozed = await snoozeItem(row.key, p.choice)
+        if (!snoozed) return { stderr: 'That item is no longer in the list: run `ccc inbox list` again.\n', code: 1 }
+        const { until } = snoozed
         return { stdout: `Snoozed until ${until === null ? 'it changes' : CLI.when(until)}: ${title}\n` }
       } catch (e) {
         return { stderr: `${p.cmd} failed: ${CLI.oneLine(why(e), 300)}\n`, code: 1 }
@@ -922,11 +915,7 @@ function createInbox(ctx, opts = {}) {
     disposed = true
     sources.dispose()
     jev.dispose()
-    for (const d of disposers) {
-      try {
-        if (typeof d === 'function') d()
-      } catch {}
-    }
+    disposeAll()
   }
 
   return {

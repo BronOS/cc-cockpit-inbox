@@ -20,6 +20,7 @@
 // Nothing here throws on a hostile provider: a bad answer is a state on that source.
 
 const { CAPS, describeOf, featuresOf, itemOf, goneOf, syncOf } = require('./feed')
+const { why, withTimeout } = require('./util')
 
 const CALL_MS = 10000
 // Events buffered for one source while its snapshot is pending. A provider that emits past this
@@ -27,18 +28,6 @@ const CALL_MS = 10000
 // second snapshot is newer than every dropped event, so nothing is lost).
 const MAX_BUFFER = 2000
 const EVENTS = ['item', 'gone', 'sync']
-
-const why = (e) => (e && e.message) || String(e)
-
-function withTimeout(p, ms, what) {
-  let t
-  return Promise.race([
-    Promise.resolve(p).finally(() => clearTimeout(t)),
-    new Promise((_, reject) => {
-      t = setTimeout(() => reject(new Error(`${what} did not answer in ${Math.round(ms / 1000)} s`)), ms)
-    }),
-  ])
-}
 
 /**
  * The store over `set` (`ctx.services.useAll('inbox-feed')`). `opts`: `log` ({ warn }), `onChange(pluginId)`

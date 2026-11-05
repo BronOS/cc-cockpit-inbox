@@ -47,8 +47,8 @@ const FIELDS = Object.freeze({
   time: { ops: ['newerThan', 'olderThan'], value: 'minutes' },
 })
 
-/** The item key: one rule for the sort, the traces, the host and state.js. */
-const keyOf = (pluginId, id) => `${pluginId}\u0000${id}`
+// The item key: one rule for the sort, the traces, the host and state.js (lib/util.js).
+const { keyOf } = require('./util')
 
 /** Case-insensitive form of a string: NFKC then lower case (a full-width "ＡＢＣ" matches "abc"). */
 const norm = (s) => String(s).normalize('NFKC').toLowerCase()

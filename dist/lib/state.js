@@ -17,14 +17,12 @@
 const crypto = require('node:crypto')
 
 const PREFIX = 'st:'
-const KEEP_MS = 14 * 24 * 3600000
-const SEEN_EVERY_MS = 24 * 3600000
 // The store's key rule (`ccc guide api`): ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$.
 const KEY_OK = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const PART_OK = /^[A-Za-z0-9._-]{1,200}$/
 
-// The item key: one rule with rules.js (sorting, traces) and the host.
-const { keyOf: rankKey } = require('./rules')
+// The item key: one rule with rules.js (sorting, traces) and the host, from the leaf (lib/util.js).
+const { keyOf: rankKey, KEEP_MS, SEEN_EVERY_MS, SNOOZE_CHOICES, DEFAULT_TIMES } = require('./util')
 
 /**
  * The storage key of an item: `st:<pluginId>:<id>` when that fits the store's rule, else
@@ -54,7 +52,7 @@ function atTime(t, hhmm, addDays = 0) {
  * When a snooze choice ends: `1h`, `afternoon` (today at the afternoon time, or tomorrow's if that
  * has passed), `tomorrow` (the morning time tomorrow), `changes` (no time: until the item changes).
  */
-function untilOf(choice, now, times = { afternoon: '14:00', morning: '09:00' }) {
+function untilOf(choice, now, times = DEFAULT_TIMES) {
   if (choice === '1h') return now + 3600000
   if (choice === 'afternoon') {
     const today = atTime(now, times.afternoon)
@@ -62,7 +60,7 @@ function untilOf(choice, now, times = { afternoon: '14:00', morning: '09:00' }) 
   }
   if (choice === 'tomorrow') return atTime(now, times.morning, 1)
   if (choice === 'changes') return null
-  throw new Error(`inbox: unknown snooze "${choice}" (1h, afternoon, tomorrow or changes)`)
+  throw new Error(`inbox: unknown snooze "${choice}" (${SNOOZE_CHOICES.slice(0, -1).join(', ')} or ${SNOOZE_CHOICES[SNOOZE_CHOICES.length - 1]})`)
 }
 
 const isEntry = (v) =>
@@ -275,4 +273,4 @@ function createState(store) {
   return { load, view, status, doneList, undoLastDone, done, snooze, restore, undo, woken, markNotified, touch, prune, today, entries: () => entries }
 }
 
-module.exports = { createState, storageKey, untilOf, startOfDay, rankKey, KEEP_MS }
+module.exports = { createState, storageKey, untilOf, startOfDay, rankKey, KEEP_MS, SNOOZE_CHOICES, DEFAULT_TIMES }

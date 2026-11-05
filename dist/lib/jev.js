@@ -37,8 +37,7 @@ const TEXT_MAX = 1500
 const BATCH = 100
 const PACE_MS = 2000
 const RETRY_MS = 10 * 60000
-const KEEP_MS = 14 * 24 * 3600000
-const SEEN_EVERY_MS = 24 * 3600000
+const { KEEP_MS, SEEN_EVERY_MS } = require('./util')
 // The services layer sets no deadline ("a consumer races its own"): a grid that never settles would
 // hold its lane's in-flight slot for good, so no further batch of that question would ever go.
 const CALL_TIMEOUT_MS = 45000

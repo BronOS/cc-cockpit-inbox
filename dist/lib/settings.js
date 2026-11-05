@@ -29,9 +29,11 @@ const AGENDA = ['top', 'bottom', 'off']
 const CAPS = Object.freeze({ groups: 20, rules: 200, conditions: 20, groupName: 40, ruleName: 60, question: 300 })
 // Ids are minted by the settings page. Starting with a letter or digit keeps `__proto__` and friends
 // out (ids become Map keys and DOM data attributes, never object keys, but it costs nothing).
-const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/
+// A group's or rule's id: at most this long (the host cuts a page's rule id to it too).
+const MAX_ID_LENGTH = 40
+const ID = new RegExp(`^[A-Za-z0-9][A-Za-z0-9_-]{0,${MAX_ID_LENGTH - 1}}$`)
 
-const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+const { isObj } = require('./util')
 const own = (o, k) => (isObj(o) && Object.hasOwn(o, k) ? o[k] : undefined)
 /** A one-line string, trimmed, 1..max characters, or undefined. */
 function line(v, max) {
@@ -278,4 +280,4 @@ async function resetSettings(store) {
   return saveSettings(store, defaults())
 }
 
-module.exports = { KEY, VERSION, AGENDA, CAPS, ID, defaults, readSettings, checkSettings, conditionProblem, loadSettings, saveSettings, resetSettings }
+module.exports = { KEY, VERSION, AGENDA, CAPS, ID, MAX_ID_LENGTH, defaults, readSettings, checkSettings, conditionProblem, loadSettings, saveSettings, resetSettings }

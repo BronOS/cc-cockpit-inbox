@@ -3,10 +3,12 @@
 // runs the action. Provider text (titles) is untrusted, so every line printed here is one line, free of
 // control characters, and cut.
 
+const { SNOOZE_CHOICES } = require('./util')
+
 const MAX_ROWS = 50
 const MAX_TITLE = 120
 const MAX_REASON = 240
-const CHOICES = ['1h', 'afternoon', 'tomorrow', 'changes']
+const CHOICES = SNOOZE_CHOICES
 const CAL_REF = 'calendar'
 
 const ACTION_ID = /^[a-z][A-Za-z0-9-]{0,39}$/
