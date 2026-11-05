@@ -193,6 +193,16 @@ test('Done view: newest first, live title else stored, snoozes left out, Back to
   assert.deepEqual(st.doneList(live).map((d) => d.id), ['a'])
 })
 
+test('a done item that came back (new rev) is not in the Done view, and search does not mark it Done', async () => {
+  const st = createState(fakeAppStorage())
+  await st.done(row('a'), NOW)
+  const back = v2('a', 'r2', 'bronos.mail', 'Live A')
+  assert.equal(st.status(back, NOW).back, true)
+  const live = new Map([[rankKey('bronos.mail', 'a'), back]])
+  assert.deepEqual(st.doneList(live), [])
+  assert.equal(require('../dist/lib/search').search('live', [back], st.doneList(live))[0].done, false)
+})
+
 test('a gone item keeps its Done entry until pruned; it stays done on return with the same rev', async () => {
   const st = createState(fakeAppStorage())
   await st.done(row('a'), NOW)

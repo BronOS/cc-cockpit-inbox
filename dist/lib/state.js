@@ -149,11 +149,17 @@ function createState(store) {
 
   /**
    * The Done view: done entries newest first, each with the live title when the item is still in
-   * `liveByKey` (a Map of rank key -> feed item), else the stored one.
+   * `liveByKey` (a Map of rank key -> feed item), else the stored one. A done entry whose live item
+   * has a different `rev` has come back (the entry stays, see judge()), so it is not listed: it is
+   * in the Inbox marked "back", and search must not mark it Done either.
    */
   function doneList(liveByKey = new Map()) {
     return [...entries.values()]
-      .filter((e) => e.kind === 'done')
+      .filter((e) => {
+        if (e.kind !== 'done') return false
+        const live = liveByKey.get(rankKey(e.pluginId, e.id))
+        return !(live && live.rev !== e.rev)
+      })
       .sort((a, b) => b.at - a.at)
       .map((e) => {
         const live = liveByKey.get(rankKey(e.pluginId, e.id))
