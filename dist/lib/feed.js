@@ -5,7 +5,7 @@
 // capped, unknown fields left out, and nothing here ever throws on a hostile answer. The panel
 // renders every string as text; colours are names from a fixed palette, never CSS.
 
-const CAPS = { items: 50, title: 300, from: 120, where: 120, label: 24, badge: 6, id: 300, rev: 300, message: 300, events: 100, upcoming: 20 }
+const CAPS = { items: 50, perSource: 1000, gone: 500, id: 200, rev: 100, preview: 1000, name: 120, address: 254, placeStatus: 60, scope: 120, labels: 20, labelLen: 40, actions: 8, actionLabel: 40, title: 300, from: 120, where: 120, label: 24, badge: 6, v1Id: 300, v1Rev: 300, message: 300, events: 100, upcoming: 20 }
 const LEVELS = new Set(['urgent', 'action', 'fyi', 'noise'])
 const COLORS = new Set(['green', 'red', 'blue', 'amber', 'violet', 'grey'])
 const KINDS = new Set(['chat', 'mail', 'issues', 'other'])
@@ -37,24 +37,27 @@ function describeOf(raw, pluginId) {
   const badge = text(own(raw, 'badge'), CAPS.badge)
   const color = own(raw, 'color')
   const kind = own(raw, 'kind')
+  // `scope` (feed v2): what the source feeds, shown on its line; absent from a v1 answer.
+  const scope = text(own(raw, 'scope'), CAPS.scope)
   return {
     label: label || fallback.label,
     badge: (badge || fallback.badge).toUpperCase(),
     color: COLORS.has(color) ? color : 'grey',
     kind: KINDS.has(kind) ? kind : 'other',
+    ...(scope ? { scope } : {}),
   }
 }
 
-/** One FeedItem, or null when its required fields are missing or of the wrong type. */
-function itemOf(raw) {
+/** One v1 FeedItem (items() answers, until the host moves to feed v2), or null. */
+function itemV1Of(raw) {
   if (!isObj(raw)) return null
-  const id = text(own(raw, 'id'), CAPS.id)
+  const id = text(own(raw, 'id'), CAPS.v1Id)
   const title = text(own(raw, 'title'), CAPS.title)
   const level = own(raw, 'level')
   if (!id || title === null || !LEVELS.has(level)) return null
   const out = {
     id,
-    rev: text(own(raw, 'rev'), CAPS.rev) || '',
+    rev: text(own(raw, 'rev'), CAPS.v1Rev) || '',
     title,
     from: text(own(raw, 'from'), CAPS.from) || '',
     where: text(own(raw, 'where'), CAPS.where) || '',
@@ -83,7 +86,7 @@ function itemsOf(raw) {
   const seen = new Set()
   const items = []
   for (const r of own(raw, 'items').slice(0, CAPS.items)) {
-    const it = itemOf(r)
+    const it = itemV1Of(r)
     if (!it || seen.has(it.id)) continue
     seen.add(it.id)
     items.push(it)
@@ -93,10 +96,152 @@ function itemsOf(raw) {
   return { items, asOf: ms(own(raw, 'asOf')), state: STATES.has(state) ? state : 'ok', ...(message ? { message } : {}) }
 }
 
+// ---- feed v2 (design-v2 "The item"): item / gone / sync events and snapshot() --------------------
+const TO = new Set(['direct', 'group', 'cc'])
+const PLACE_KINDS = new Set(['channel', 'folder', 'project'])
+const ACTION_ID = /^[a-z][A-Za-z0-9-]{0,39}$/
+// Control characters (C0, DEL, C1, line and paragraph separators) never belong in an id or a label.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+/** A time key: finite and > 0 (design table), not the narrower calendar range of `ms`. */
+const posTime = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null)
+/** An id as the table wants it: 1..max characters, no control characters, else null (refused, never cut). */
+function idText(v, max) {
+  return typeof v === 'string' && v.length >= 1 && v.length <= max && !CONTROL.test(v) ? v : null
+}
+/** A one-line string with whitespace runs collapsed to one space, cut to `max`, or null when empty or not a string. */
+function line(v, max) {
+  if (typeof v !== 'string') return null
+  const one = v.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
+  if (!one) return null
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one
+}
+
+function actionsOf(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const out = []
+  for (const a of raw) {
+    if (out.length >= CAPS.actions) break
+    if (!isObj(a)) continue
+    const id = own(a, 'id')
+    const label = line(own(a, 'label'), CAPS.actionLabel)
+    if (typeof id !== 'string' || !ACTION_ID.test(id) || !label || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, label })
+  }
+  return out
+}
+
+function labelsOf(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const out = []
+  for (const l of raw) {
+    if (out.length >= CAPS.labels) break
+    const t = line(l, CAPS.labelLen)
+    // Compared case-insensitively: "Alert" and "alert" are one label (the first spelling is kept).
+    if (!t || seen.has(t.toLowerCase())) continue
+    seen.add(t.toLowerCase())
+    out.push(t)
+  }
+  return out
+}
+
+/**
+ * One v2 FeedItem. Returns `{ item, refused }`: `item` is null and `refused` 1 when a required field (id,
+ * rev, title, time) is missing or bad; optional fields of the wrong type are left out. Never throws.
+ */
+function itemOf(raw) {
+  const bad = { item: null, refused: 1 }
+  if (!isObj(raw)) return bad
+  const id = idText(own(raw, 'id'), CAPS.id)
+  const rev = line(own(raw, 'rev'), CAPS.rev)
+  const title = line(own(raw, 'title'), CAPS.title)
+  const time = posTime(own(raw, 'time'))
+  if (!id || !rev || !title || time === null) return bad
+  const read = own(raw, 'read')
+  const out = { id, rev, title, time, mentionsMe: own(raw, 'mentionsMe') === true, read: typeof read === 'boolean' ? read : null }
+  const preview = line(own(raw, 'preview'), CAPS.preview)
+  if (preview) out.preview = preview
+  const from = own(raw, 'from')
+  if (isObj(from)) {
+    const name = line(own(from, 'name'), CAPS.name)
+    const address = line(own(from, 'address'), CAPS.address)
+    if (name || address) out.from = { ...(name ? { name } : {}), ...(address ? { address } : {}) }
+  }
+  const to = own(raw, 'to')
+  if (TO.has(to)) out.to = to
+  const place = own(raw, 'place')
+  if (isObj(place) && PLACE_KINDS.has(own(place, 'kind'))) {
+    const name = line(own(place, 'name'), CAPS.name)
+    const status = line(own(place, 'status'), CAPS.placeStatus)
+    if (name) out.place = { kind: own(place, 'kind'), name, ...(status ? { status } : {}) }
+  }
+  out.labels = labelsOf(own(raw, 'labels'))
+  out.actions = actionsOf(own(raw, 'actions'))
+  return { item: out, refused: 0 }
+}
+
+/**
+ * A `sync` / `snapshot()` answer: `{ items, state, message?, asOf, refused, overCap }`. `refused` counts items
+ * left out (bad, or a duplicate id: the first wins); `overCap` counts items past 1000 (the newest by `time` stay).
+ * A malformed answer is a source error with no items.
+ */
+function syncOf(raw) {
+  if (!isObj(raw) || !Array.isArray(own(raw, 'items'))) {
+    return { items: [], state: 'error', message: 'the source answered something Inbox cannot read', asOf: null, refused: 0, overCap: 0 }
+  }
+  const list = own(raw, 'items')
+  const seen = new Set()
+  let items = []
+  let refused = 0
+  // Bound the work on a hostile 10-million-entry array: past twice the cap everything is counted, not parsed.
+  const scan = Math.min(list.length, CAPS.perSource * 2)
+  for (let i = 0; i < scan; i++) {
+    const { item } = itemOf(list[i])
+    if (!item || seen.has(item.id)) {
+      refused++
+      continue
+    }
+    seen.add(item.id)
+    items.push(item)
+  }
+  let overCap = list.length - scan
+  if (items.length > CAPS.perSource) {
+    overCap += items.length - CAPS.perSource
+    items = items.sort((a, b) => b.time - a.time).slice(0, CAPS.perSource)
+  }
+  const state = own(raw, 'state')
+  const message = line(own(raw, 'message'), CAPS.message)
+  return { items, state: STATES.has(state) ? state : 'ok', ...(message ? { message } : {}), asOf: posTime(own(raw, 'asOf')), refused, overCap }
+}
+
+/** A `gone` event's data `{ ids }`: `{ ids, refused, overCap }`, at most 500 ids, bad ones counted, duplicates folded. */
+function goneOf(raw) {
+  const list = isObj(raw) && Array.isArray(own(raw, 'ids')) ? own(raw, 'ids') : []
+  const seen = new Set()
+  const ids = []
+  let refused = isObj(raw) && Array.isArray(own(raw, 'ids')) ? 0 : 1
+  let overCap = 0
+  for (const v of list) {
+    if (ids.length >= CAPS.gone) {
+      overCap++
+      continue
+    }
+    const id = idText(v, CAPS.id)
+    if (!id) refused++
+    else if (!seen.has(id)) {
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  return { ids, refused, overCap }
+}
+
 /** One CalEvent, or null. `meetUrl` only when it is an https URL. */
 function eventOf(raw) {
   if (!isObj(raw)) return null
-  const id = text(own(raw, 'id'), CAPS.id)
+  const id = text(own(raw, 'id'), CAPS.v1Id)
   const start = ms(own(raw, 'start'))
   const end = ms(own(raw, 'end'))
   if (!id || start === null || end === null || end < start) return null
@@ -155,4 +300,4 @@ function featuresOf(raw) {
   return new Set(Array.isArray(raw) ? raw.filter((f) => f === 'markRead' || f === 'recent' || f === 'markUnread') : [])
 }
 
-module.exports = { CAPS, describeOf, itemOf, itemsOf, eventOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl }
+module.exports = { CAPS, describeOf, itemOf, syncOf, goneOf, itemsOf, eventOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl }

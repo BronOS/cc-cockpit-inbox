@@ -1,7 +1,7 @@
 'use strict'
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { CAPS, describeOf, itemsOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl } = require('../dist/lib/feed')
+const { CAPS, describeOf, itemOf, syncOf, goneOf, itemsOf, calDayOf, calUpcomingOf, featuresOf, httpsUrl } = require('../dist/lib/feed')
 const { item, NOW, HOUR } = require('./fakes')
 
 test('describeOf keeps a good answer and falls back on junk', () => {
@@ -84,4 +84,142 @@ test('features and URLs', () => {
   assert.equal(httpsUrl('http://example.com'), null)
   assert.equal(httpsUrl(`https://example.com/${'x'.repeat(2100)}`), null)
   assert.equal(httpsUrl('https://example.com/a b'), 'https://example.com/a%20b')
+})
+
+// ---- feed v2 ----
+const v2 = (id, extra = {}) => ({ id, rev: 'r1', title: `title ${id}`, time: NOW, read: false, actions: [{ id: 'open', label: 'Open' }], ...extra })
+
+test('describeOf: scope is cut to 120 and left out when absent or not a string', () => {
+  assert.equal(describeOf({ label: 'Mail', scope: 'unread + read of the last 14 days' }, 'p').scope, 'unread + read of the last 14 days')
+  assert.equal(describeOf({ label: 'Mail', scope: 'x'.repeat(300) }, 'p').scope.length, CAPS.scope)
+  assert.equal('scope' in describeOf({ label: 'Mail', scope: 5 }, 'p'), false)
+})
+
+test('itemOf keeps a full valid item', () => {
+  const { item, refused } = itemOf(v2('a', { preview: 'p', from: { name: 'N', address: 'n@example.com' }, to: 'direct', mentionsMe: true, place: { kind: 'project', name: 'APP', status: 'Open' }, labels: ['assigned'], read: true }))
+  assert.equal(refused, 0)
+  assert.deepEqual(item, { id: 'a', rev: 'r1', title: 'title a', time: NOW, mentionsMe: true, read: true, preview: 'p', from: { name: 'N', address: 'n@example.com' }, to: 'direct', place: { kind: 'project', name: 'APP', status: 'Open' }, labels: ['assigned'], actions: [{ id: 'open', label: 'Open' }] })
+})
+
+test('itemOf: titles and previews are cut and flattened to one line; names and places are cut', () => {
+  const { item } = itemOf(v2('a', { title: `a\n\n  b\t${'x'.repeat(400)}`, preview: `${'y '.repeat(800)}`, from: { name: 'n'.repeat(500), address: 'a'.repeat(500) }, place: { kind: 'channel', name: 'c'.repeat(500), status: 's'.repeat(500) } }))
+  assert.equal(item.title.length, CAPS.title)
+  assert.ok(item.title.startsWith('a b '))
+  assert.equal(item.preview.length, CAPS.preview)
+  assert.equal(item.from.name.length, CAPS.name)
+  assert.equal(item.from.address.length, CAPS.address)
+  assert.equal(item.place.name.length, CAPS.name)
+  assert.equal(item.place.status.length, CAPS.placeStatus)
+})
+
+test('itemOf: bad or missing id, rev, title or time refuses the item', () => {
+  for (const bad of [null, 5, [], {}, v2('a', { id: '' }), v2('a', { id: 'x'.repeat(201) }), v2('a', { id: 'a\nb' }), v2('a', { id: 7 }), v2('a', { rev: '' }), v2('a', { rev: undefined }), v2('a', { title: '  ' }), v2('a', { title: 3 }), v2('a', { time: 0 }), v2('a', { time: -1 }), v2('a', { time: NaN }), v2('a', { time: Infinity }), v2('a', { time: '5' })]) {
+    assert.deepEqual(itemOf(bad), { item: null, refused: 1 })
+  }
+  assert.equal(itemOf(v2('a', { id: 'x'.repeat(200) })).refused, 0)
+  assert.equal(itemOf(v2('a', { rev: 'r'.repeat(300) })).item.rev.length, CAPS.rev)
+})
+
+test('itemOf: read is boolean or null; optional fields of the wrong type are left out; unknown fields dropped', () => {
+  assert.equal(itemOf(v2('a', { read: 'yes' })).item.read, null)
+  assert.equal(itemOf(v2('a', { read: null })).item.read, null)
+  const { item } = itemOf(v2('a', { to: 'everyone', mentionsMe: 'yes', from: 5, place: { kind: 'planet', name: 'x' }, preview: 7, level: 'urgent', extra: { a: 1 } }))
+  assert.equal(item.to, undefined)
+  assert.equal(item.mentionsMe, false)
+  assert.equal(item.from, undefined)
+  assert.equal(item.place, undefined)
+  assert.equal(item.preview, undefined)
+  assert.equal('level' in item, false)
+  assert.equal('extra' in item, false)
+})
+
+test('itemOf: labels are capped at 20, compared case-insensitively, one line each', () => {
+  const labels = ['Alert', 'alert', 'x'.repeat(100), '', 5, ...Array.from({ length: 40 }, (_, i) => `l${i}`)]
+  const { item } = itemOf(v2('a', { labels }))
+  assert.equal(item.labels.length, CAPS.labels)
+  assert.equal(item.labels[0], 'Alert')
+  assert.equal(item.labels[1].length, CAPS.labelLen)
+  assert.equal(item.labels.filter((l) => l.toLowerCase() === 'alert').length, 1)
+  assert.deepEqual(itemOf(v2('a', { labels: 'alert' })).item.labels, [])
+})
+
+test('itemOf: actions are capped at 8, ids match the pattern, labels 1-40, duplicates dropped', () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({ id: `act${i}`, label: `Act ${i}` }))
+  assert.equal(itemOf(v2('a', { actions: many })).item.actions.length, CAPS.actions)
+  const { item } = itemOf(v2('a', { actions: [{ id: 'Open', label: 'x' }, { id: '1a', label: 'x' }, { id: 'a_b', label: 'x' }, { id: 'a'.repeat(41), label: 'x' }, { id: 'ok-1', label: '' }, { id: 'ok-2', label: 'y'.repeat(80) }, { id: 'ok-2', label: 'dup' }, { id: 'markRead', label: 'Read' }, null, 'open'] }))
+  assert.deepEqual(item.actions.map((a) => a.id), ['ok-2', 'markRead'])
+  assert.equal(item.actions[0].label.length, CAPS.actionLabel)
+  assert.deepEqual(itemOf(v2('a', { actions: undefined })).item.actions, [])
+})
+
+test('itemOf: prototype keys never reach the result', () => {
+  const raw = JSON.parse('{"id":"p","rev":"r","title":"t","time":5,"__proto__":{"to":"cc"},"constructor":"x","from":{"__proto__":{"name":"evil"}},"labels":["__proto__","constructor"],"actions":[{"id":"open","label":"Open","__proto__":{"x":1}}]}')
+  const { item } = itemOf(raw)
+  assert.equal(item.to, undefined)
+  assert.equal(item.from, undefined)
+  assert.equal(Object.getPrototypeOf(item), Object.prototype)
+  assert.equal(({}).to, undefined)
+  assert.deepEqual(item.labels, ['__proto__', 'constructor'])
+  assert.deepEqual(item.actions, [{ id: 'open', label: 'Open' }])
+})
+
+test('syncOf: items, state, message and asOf; unknown state reads ok; message cut', () => {
+  const r = syncOf({ items: [v2('a'), v2('b')], state: 'signedOut', message: 'm'.repeat(500), asOf: NOW })
+  assert.deepEqual(r.items.map((i) => i.id), ['a', 'b'])
+  assert.equal(r.state, 'signedOut')
+  assert.equal(r.message.length, CAPS.message)
+  assert.equal(r.asOf, NOW)
+  assert.equal(r.refused, 0)
+  assert.equal(r.overCap, 0)
+  assert.equal(syncOf({ items: [], state: 'weird' }).state, 'ok')
+  assert.equal(syncOf({ items: [] }).asOf, null)
+  assert.equal('message' in syncOf({ items: [] }), false)
+})
+
+test('syncOf: a malformed answer is a source error with no items', () => {
+  for (const bad of [null, 'junk', 5, [], {}, { items: 'no' }, { items: {} }]) {
+    const r = syncOf(bad)
+    assert.equal(r.state, 'error')
+    assert.deepEqual(r.items, [])
+    assert.ok(r.message)
+  }
+})
+
+test('syncOf: refused items and duplicate ids are counted; the first duplicate wins', () => {
+  const r = syncOf({ items: [v2('a', { title: 'first' }), v2('a', { title: 'second' }), null, { id: 'b' }, v2('c')] })
+  assert.deepEqual(r.items.map((i) => i.title), ['first', 'title c'])
+  assert.equal(r.refused, 3)
+})
+
+test('syncOf: past 1000 items the newest by time stay and the rest are counted', () => {
+  const items = Array.from({ length: 1005 }, (_, i) => v2(`i${i}`, { time: 1000 + i }))
+  const r = syncOf({ items })
+  assert.equal(r.items.length, CAPS.perSource)
+  assert.equal(r.overCap, 5)
+  assert.equal(Math.min(...r.items.map((i) => i.time)), 1005)
+  assert.equal(r.items[0].id, 'i1004')
+})
+
+test('syncOf: a huge array is bounded, not fully parsed', () => {
+  const items = Array.from({ length: 5000 }, (_, i) => v2(`i${i}`, { time: 1 + i }))
+  const r = syncOf({ items })
+  assert.equal(r.items.length, CAPS.perSource)
+  assert.equal(r.overCap, 4000)
+})
+
+test('syncOf: prototype keys in the answer and items do not leak', () => {
+  const r = syncOf(JSON.parse('{"items":[{"id":"a","rev":"r","title":"t","time":5,"__proto__":{"read":true}}],"__proto__":{"state":"error"},"constructor":{}}'))
+  assert.equal(r.state, 'ok')
+  assert.equal(r.items[0].read, null)
+  assert.deepEqual(syncOf(JSON.parse('{"__proto__":{"items":[]}}')).state, 'error')
+})
+
+test('goneOf: ids are validated, deduplicated and capped at 500, with counts', () => {
+  assert.deepEqual(goneOf({ ids: ['a', 'b', 'a'] }), { ids: ['a', 'b'], refused: 0, overCap: 0 })
+  assert.deepEqual(goneOf({ ids: ['a', '', 5, 'x\ny', 'x'.repeat(201), null] }), { ids: ['a'], refused: 5, overCap: 0 })
+  const many = goneOf({ ids: Array.from({ length: 520 }, (_, i) => `i${i}`) })
+  assert.equal(many.ids.length, CAPS.gone)
+  assert.equal(many.overCap, 20)
+  for (const bad of [null, 'a', 5, {}, { ids: 'a' }]) assert.deepEqual(goneOf(bad), { ids: [], refused: 1, overCap: 0 })
+  assert.deepEqual(goneOf(JSON.parse('{"__proto__":{"ids":["a"]}}')).ids, [])
 })
