@@ -162,7 +162,7 @@ function validFilter(state, filter) {
   return arr(state && state.sources).some((s) => s.pluginId === filter) ? filter : 'all'
 }
 
-/** Is a group open: what the person last did with it on this page, else its setting (Rest collapsed). */
+/** Is a group open: what the person last did with it (this page, else the host's memory), else its setting (Rest collapsed). */
 function groupOpen(g, remembered) {
   return remembered && Object.prototype.hasOwnProperty.call(remembered, g.id) ? Boolean(remembered[g.id]) : !g.collapsed
 }
@@ -205,11 +205,14 @@ function viewModel(state, ui) {
     const done = arr(state && state.done && state.done.rows)
     return { kind: 'done', groups: [], done, empty: done.length ? null : 'Nothing marked done. Done hides an item until something new happens in it.' }
   }
+  // The host's memory (every window, the last start) under this page's own clicks since it loaded.
+  const host = state && state.groupsOpen && typeof state.groupsOpen === 'object' && !Array.isArray(state.groupsOpen) ? state.groupsOpen : {}
+  const remembered = { ...host, ...(ui.open || {}) }
   const groups = arr(state && state.groups)
     .map((g) => {
       const rows = arr(g.rows).filter(bySource)
       const n = filter === 'all' && Number.isFinite(g.count) ? g.count : rows.length
-      return { id: g.id, name: str(g.name), count: n, more: Math.max(0, n - rows.length), open: groupOpen(g, ui.open), rows }
+      return { id: g.id, name: str(g.name), count: n, more: Math.max(0, n - rows.length), open: groupOpen(g, remembered), rows }
     })
     .filter((g) => g.count > 0)
   let empty = null

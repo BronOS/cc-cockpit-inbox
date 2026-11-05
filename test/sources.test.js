@@ -304,3 +304,16 @@ test('handle() gives the provider handle for act; dispose unsubscribes', async (
   assert.deepEqual(changes, [])
   assert.deepEqual(store.list(), [])
 })
+
+test('the v1 extras some sources still send (recent, canUnread, markUnread as a method) are dropped; markUnread as an action stays', async () => {
+  // Gmail, Chat and Jira 0.5 keep their v1 provider beside v2 and may leave v1 fields on items. The
+  // v2 contract (docs/design-v2.md "Stops") has none of them: marking unread is only the action.
+  const actions = [{ id: 'open', label: 'Open' }, { id: 'markUnread', label: 'Mark unread' }]
+  const mail = fakeFeedV2(V2_MAIL, [item2('t1', { read: true, actions, extra: { recent: true, canUnread: true, markUnread: 'x' } })])
+  const { store } = await setup({ 'bronos.gmail': mail })
+  const [it] = store.get('bronos.gmail').items
+  for (const k of ['recent', 'canUnread', 'markUnread']) assert.equal(Object.hasOwn(it, k), false, k)
+  assert.equal(it.read, true)
+  assert.deepEqual(it.actions, actions)
+  store.dispose()
+})

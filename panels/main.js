@@ -20,8 +20,9 @@ const ui = {
   filter: 'all',
   sel: null,
   menu: null,
-  // A group's open state as the person last left it, by group id, for this page's life (a panel page
-  // has an opaque origin: no localStorage). Groups never touched follow their setting.
+  // A group's open state as the person left it on this page, by group id, over the one the host
+  // remembers for every window (state.groupsOpen: a page has an opaque origin, no localStorage).
+  // Groups never touched follow their setting.
   open: {},
   searching: false,
   notice: null,
@@ -177,7 +178,10 @@ function groupEl(g) {
   d.addEventListener('toggle', () => {
     if (d.open === g.open) return
     // Search shows every group open: a click there does nothing (and is not remembered for the list).
-    if (!(model && model.kind === 'search')) ui.open[g.id] = d.open
+    if (!(model && model.kind === 'search')) {
+      ui.open[g.id] = d.open
+      post('groupOpen', { id: g.id, open: d.open })
+    }
     render()
   })
   const ul = el('ul', { class: 'cc-list', 'aria-label': g.name })
@@ -247,6 +251,8 @@ function render() {
     return
   }
   $('toolbar').hidden = false
+  // The host cut the list to fit the app's message limit (host.js fittedSnapshot): said for as long as it lasts.
+  if (typeof state.limited === 'string' && state.limited) notice.append(el('div', { class: 'cc-muted', role: 'status', text: state.limited }))
   ui.filter = validFilter(state, ui.filter)
   model = viewModel(state, ui)
   // Keep the selection on a row that is still drawn.

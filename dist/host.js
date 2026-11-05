@@ -51,10 +51,18 @@ const UNDO_MS = 6000
 // request, never a different order.
 const JEV_LOAD_MS = 10 * 60000
 const AGENDA_HEIGHT = 140
-// The panel message stays well under the 1 MiB post limit with 1000 items per source: rows per
-// group, Done entries and search results are capped (the counts go with them), previews cut.
+// The panel message must stay under the app's post limit (1 MiB of JSON text,
+// MAX_PANEL_MESSAGE_LENGTH): rows per group, Done entries and search results are capped (the counts
+// go with them), previews cut. Those caps alone do not bound the total: settings allow 20 groups of
+// 200 rows, each row up to ~2 KB (title, preview, labels, actions), so a heavy inbox passes the
+// limit, the post throws and the panel would freeze on its last state with no word. So publish()
+// measures the message and, over POST_BUDGET (room left for the JSON of the notice and slack),
+// drops previews first, then halves the rows per group until it fits, and says so in the panel
+// (`limited`); the row counts still show "N more not shown".
 const ROWS_SHOWN = 200
 const PREVIEW_SHOWN = 200
+const POST_BUDGET = 800 * 1024
+const MIN_ROWS_SHOWN = 5
 const MAX_QUERY = 200
 // A snooze that ended while the app was closed is not announced when it opens: only one that ended
 // in the last 15 minutes, and at most 3 a refresh (the app caps notifications at 10 a minute).
@@ -66,6 +74,12 @@ const SNOOZE_TIMES = { afternoon: '14:00', morning: '09:00' }
 // The settings page's "Test": examples shown, and their titles cut (the page draws text only).
 const TEST_EXAMPLES = 5
 const TEST_TITLE = 120
+// A group's open state as the person last left it (design-v2 "The panel": remembered), app-wide
+// like the settings. A panel page has an opaque origin (no localStorage), so the host keeps it:
+// `{ <group id>: true | false }`, only ids of groups that exist, at most one per group cap.
+const OPEN_KEY = 'ui:groupsOpen'
+const GROUP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/
+const FULL_FIT = Object.freeze({ rows: ROWS_SHOWN, preview: PREVIEW_SHOWN })
 const OLD_APP = 'Inbox 0.2.0 needs cc-cockpit 0.10.0 or newer (slots, overlay buttons and the services collector). Update the app.'
 
 // What a failed panel action is called in its notice: the button's words, not the message type.
@@ -139,6 +153,8 @@ function createInbox(ctx, opts = {}) {
   let lastHeader = ''
   let lastAgenda
   let query = ''
+  /** group id -> open, as the person left it (OPEN_KEY). */
+  let groupsOpen = {}
   let jevLoadedAt = -Infinity
   let publishQueued = false
   let ticking = null
@@ -200,7 +216,13 @@ function createInbox(ctx, opts = {}) {
         }
         visible.push({ key, item, placement: p.placement, back: st.back })
       }
-      for (const key of [...placed.keys()]) if (!live.has(key)) placed.delete(key)
+      for (const [key, p] of [...placed]) {
+        if (live.has(key)) continue
+        placed.delete(key)
+        // Left its feed: a Jev request still queued for it is dropped, not asked (a full placement's
+        // sweep does the same for everything at once).
+        if (!full) jev.forget(p.item.source, p.item.id)
+      }
       return visible
     }
     const visible = full ? jev.sweep(run) : run()
@@ -218,7 +240,7 @@ function createInbox(ctx, opts = {}) {
   const descOf = (pluginId) => view.descs.get(pluginId) || { label: pluginId, badge: 'FEED', color: 'grey', kind: 'other' }
 
   /** One row as the panel draws it: plain data, text only, the actions minus `open` (the row click). */
-  function rowOut(key, item, extra) {
+  function rowOut(key, item, extra, fit = FULL_FIT) {
     const d = descOf(item.source)
     const actions = item.actions || []
     return {
@@ -226,7 +248,7 @@ function createInbox(ctx, opts = {}) {
       source: item.source,
       id: item.id,
       title: item.title,
-      ...(item.preview ? { preview: cut(item.preview, PREVIEW_SHOWN) } : {}),
+      ...(item.preview && fit.preview > 0 ? { preview: cut(item.preview, fit.preview) } : {}),
       time: item.time,
       ...(item.from ? { from: item.from } : {}),
       ...(item.to ? { to: item.to } : {}),
@@ -244,7 +266,7 @@ function createInbox(ctx, opts = {}) {
   }
 
   /** Search results grouped as the list is; Done and snoozed items marked, Done entries with no live item last. */
-  function searchOut(t) {
+  function searchOut(t, fit) {
     if (!query) return null
     const hits = search(query, [...view.live.values()], state.doneList(view.live))
     const groups = view.groups.map((g) => ({ id: g.id, name: g.name, rows: [] }))
@@ -266,14 +288,18 @@ function createInbox(ctx, opts = {}) {
     let shown = 0
     for (const g of groups) {
       g.rows.sort(byTime)
-      g.rows = g.rows.slice(0, Math.max(0, ROWS_SHOWN - shown)).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, done: r.done, snoozed: r.snoozed }))
+      g.rows = g.rows.slice(0, Math.max(0, fit.rows - shown)).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, done: r.done, snoozed: r.snoozed }, fit))
       shown += g.rows.length
     }
-    return { query, count: hits.length, groups: groups.filter((g) => g.rows.length), done: done.slice(0, Math.max(0, ROWS_SHOWN - shown)) }
+    return { query, count: hits.length, groups: groups.filter((g) => g.rows.length), done: done.slice(0, Math.max(0, fit.rows - shown)) }
   }
 
-  /** The panel's whole state: groups, source lines, Done view, search, undo. */
-  function snapshot(t) {
+  /**
+   * The panel's whole state: groups, source lines, Done view, search, undo. `fit` caps rows per
+   * group and preview length (publish() lowers them when the message would pass the post limit);
+   * `limited` is the panel's line saying so.
+   */
+  function snapshot(t, fit = FULL_FIT, limited = null) {
     const groups = view.groups.map((g) => ({
       id: g.id,
       name: g.name,
@@ -281,7 +307,7 @@ function createInbox(ctx, opts = {}) {
       badge: g.badge,
       count: g.rows.length,
       unread: g.rows.filter((r) => r.item.read === false).length,
-      rows: g.rows.slice(0, ROWS_SHOWN).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, back: r.back })),
+      rows: g.rows.slice(0, fit.rows).map((r) => rowOut(r.key, r.item, { reason: r.placement.reason, jev: r.placement.jev, back: r.back }, fit)),
     }))
     const shownBy = new Map()
     for (const g of view.groups) for (const r of g.rows) shownBy.set(r.item.source, (shownBy.get(r.item.source) || 0) + 1)
@@ -312,15 +338,33 @@ function createInbox(ctx, opts = {}) {
       })),
       done: {
         count: doneAll.length,
-        rows: doneAll.slice(0, ROWS_SHOWN).map((e) => {
+        rows: doneAll.slice(0, fit.rows).map((e) => {
           const d = descOf(e.pluginId)
           return { key: keyOf(e.pluginId, e.id), source: e.pluginId, id: e.id, title: e.title, at: e.at, live: e.live, badge: d.badge, color: d.color, label: d.label }
         }),
       },
-      search: searchOut(t),
+      search: searchOut(t, fit),
       undo: lastUndo && t < lastUndo.until ? { label: lastUndo.label, until: lastUndo.until } : null,
       agenda: settings.agenda,
+      groupsOpen: openOf(groupsOpen),
+      limited,
     }
+  }
+
+  /**
+   * The largest snapshot that fits POST_BUDGET: the full one, else without previews, else with the
+   * rows per group halved down to MIN_ROWS_SHOWN. Null when even that does not fit (the caller
+   * then posts a notice instead of a state the app would refuse).
+   */
+  function fittedSnapshot(t) {
+    const full = snapshot(t)
+    if (JSON.stringify(full).length <= POST_BUDGET) return full
+    const limited = 'The inbox is too large to show in full: previews are hidden and fewer rows are listed. Search or narrow by source to see the rest.'
+    for (let rows = ROWS_SHOWN; rows >= MIN_ROWS_SHOWN; rows = Math.floor(rows / 2)) {
+      const s = snapshot(t, { rows, preview: 0 }, limited)
+      if (JSON.stringify(s).length <= POST_BUDGET) return s
+    }
+    return null
   }
 
   /** The panel badge: unread items in the groups marked `badge` (`read: null`, no read state, does not count). */
@@ -336,7 +380,9 @@ function createInbox(ctx, opts = {}) {
     const d = updatedAt ? new Date(updatedAt) : null
     const spec = {
       meta: d ? `updated ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : 'loading…',
-      actions: [{ id: 'refresh', icon: 'refresh', title: 'Refresh every source' }],
+      // Each source answers snapshot() from what it last fetched (its own poll fetches): the button
+      // reads that again, it does not make a source fetch, so the title does not promise one.
+      actions: [{ id: 'refresh', icon: 'refresh', title: 'Reload from the sources' }],
     }
     const json = JSON.stringify(spec)
     if (json === lastHeader) return
@@ -367,9 +413,15 @@ function createInbox(ctx, opts = {}) {
     build(t)
     header()
     try {
-      ctx.panels.post(PANEL, snapshot(t))
+      const s = fittedSnapshot(t)
+      if (s) ctx.panels.post(PANEL, s)
+      else {
+        ctx.log.error('post: the panel state passes the post limit even cut down')
+        notice('The inbox is too large to show. Turn off a source or remove groups in the Inbox settings.')
+      }
     } catch (e) {
       ctx.log.error(`post: ${why(e)}`)
+      notice(`The inbox could not be shown: ${why(e)}`)
     }
     const b = badgeOf()
     if (b !== lastBadge) {
@@ -412,12 +464,40 @@ function createInbox(ctx, opts = {}) {
     return s
   }
 
+  /** The remembered open states of groups that exist now (a deleted group's entry is dropped). */
+  function openOf(raw) {
+    const ids = new Set([...settings.groups.map((g) => g.id), REST])
+    const out = {}
+    if (isObj(raw)) for (const [id, v] of Object.entries(raw)) if (GROUP_ID.test(id) && ids.has(id) && typeof v === 'boolean') out[id] = v
+    return out
+  }
+
+  /** The panel's toggle of a group: remembered at once here, stored for the other windows and the next start. */
+  async function rememberOpen(id, open) {
+    if (typeof id !== 'string' || !GROUP_ID.test(id) || typeof open !== 'boolean') return
+    const next = openOf({ ...groupsOpen, [id]: open })
+    if (!Object.hasOwn(next, id)) return
+    groupsOpen = next
+    try {
+      await ctx.appStorage.set(OPEN_KEY, next)
+    } catch (e) {
+      ctx.log.warn(`group state: ${why(e)}`)
+    }
+  }
+
   /** What other windows may have written: settings, Done and snooze, now and then the Jev answers. */
   async function reloadShared() {
     try {
       applySettings(await S.loadSettings(ctx.appStorage))
     } catch (e) {
       ctx.log.warn(`settings: ${why(e)}`)
+    }
+    // After the settings: only ids of groups that exist are kept.
+    try {
+      const raw = await ctx.appStorage.get(OPEN_KEY)
+      if (raw !== undefined) groupsOpen = openOf(raw)
+    } catch (e) {
+      ctx.log.warn(`group state: ${why(e)}`)
     }
     try {
       await state.load()
@@ -502,6 +582,17 @@ function createInbox(ctx, opts = {}) {
     return it
   }
 
+  /** Snooze in Inbox's memory only. Resolves the item, or null when there is none to snooze (or no such choice). */
+  async function snoozeItem(key, choice) {
+    const it = visibleByKey(key)
+    if (!it || !SNOOZES.has(choice)) return null
+    const t = now()
+    const until = untilOf(choice, t, SNOOZE_TIMES)
+    setUndo(await state.snooze(memoryRow(it), until, t), `Snoozed: ${it.title}`, t)
+    publish()
+    return it
+  }
+
   /**
    * One of the item's actions at its source: `act(id, action)` on its own plugin's handle. Refused here
    * when the item does not list the action (the source checks again). Resolves the source's reply with
@@ -534,7 +625,6 @@ function createInbox(ctx, opts = {}) {
   }
 
   async function act(m) {
-    const t = now()
     switch (m.type) {
       case 'hello':
       case 'visible':
@@ -556,11 +646,7 @@ function createInbox(ctx, opts = {}) {
         await markDone(m.key)
         return
       case 'snooze': {
-        const it = visibleByKey(m.key)
-        if (!it || !SNOOZES.has(m.choice)) return
-        const until = untilOf(m.choice, t, SNOOZE_TIMES)
-        setUndo(await state.snooze(memoryRow(it), until, t), `Snoozed: ${it.title}`, t)
-        publish()
+        await snoozeItem(m.key, m.choice)
         return
       }
       case 'undo':
@@ -578,6 +664,9 @@ function createInbox(ctx, opts = {}) {
         publish()
         return
       }
+      case 'groupOpen':
+        await rememberOpen(m.id, m.open)
+        return
       case 'search':
         query = typeof m.query === 'string' ? m.query.trim().slice(0, MAX_QUERY) : ''
         publish()
@@ -813,12 +902,14 @@ function createInbox(ctx, opts = {}) {
           if (!reply.ok) return { stderr: `open failed: ${CLI.oneLine(reply.message || 'the source refused', 300)}\n`, code: 1 }
           return { stdout: `Opened ${title}\n` }
         }
+        // The list was built before the call: the item may have been hidden (another window, a
+        // panel click) or gone since, and then nothing was marked, so no "Done:" line.
         if (p.cmd === 'done') {
-          await markDone(row.key)
+          if (!(await markDone(row.key))) return { stderr: 'That item is no longer in the list: run `ccc inbox list` again.\n', code: 1 }
           return { stdout: `Done: ${title}\n` }
         }
         const until = untilOf(p.choice, now(), SNOOZE_TIMES)
-        await act({ type: 'snooze', key: row.key, choice: p.choice })
+        if (!(await snoozeItem(row.key, p.choice))) return { stderr: 'That item is no longer in the list: run `ccc inbox list` again.\n', code: 1 }
         return { stdout: `Snoozed until ${until === null ? 'it changes' : CLI.when(until)}: ${title}\n` }
       } catch (e) {
         return { stderr: `${p.cmd} failed: ${CLI.oneLine(why(e), 300)}\n`, code: 1 }

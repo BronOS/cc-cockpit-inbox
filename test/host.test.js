@@ -481,7 +481,8 @@ test('dispose removes every listener, provider, timer, command and subscription;
   const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
   await inbox.first
   const live = ctx.live()
-  assert.ok(live.panel > 0 && live.overlay > 0 && live.timers > 0 && live.cli && live.feed > 0, JSON.stringify(live))
+  // One of each, and the feed's four event subscriptions (onChange, item, gone, sync).
+  assert.deepEqual(live, { panel: 1, actions: 1, overlay: 1, timers: 1, cli: true, feed: 4, settingsPage: 1 })
   inbox.dispose()
   assert.deepEqual(ctx.live(), { ...idle, feed: 0 })
 
@@ -492,4 +493,162 @@ test('dispose removes every listener, provider, timer, command and subscription;
   host.deactivate()
   assert.deepEqual(c2.live(), { ...idle, feed: 0 })
   host.deactivate()
+})
+
+// ---- storage and notify failures (ctx.appStorage is main's RPC: it can reject) ----
+
+test('a failed shared read keeps what this window had; the next tick recovers', async () => {
+  const store = fakeAppStorage()
+  const w1 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1'), item2('m2')]) } })
+  const w2 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1'), item2('m2')]) } })
+  await Promise.all([w1.inbox.first, w2.inbox.first])
+  await settle()
+  await w2.ctx.sendPanel({ type: 'done', key: rowOf(w2.ctx, 'm1').key })
+  // Settings (a get) and the Done entries (keys) both fail on w1's next read.
+  store.failNext('get')
+  store.failNext('keys')
+  await w1.inbox.tick()
+  assert.deepEqual(groups(w1.ctx), { mail: ['m1', 'm2'] }, 'the rows stay as they were')
+  const warns = w1.ctx.logs.filter((l) => l[0] === 'warn').map((l) => l[1])
+  assert.ok(warns.some((w) => /^settings: appStorage\.get failed/.test(w)), warns.join('\n'))
+  assert.ok(warns.some((w) => /^state: appStorage\.keys failed/.test(w)), warns.join('\n'))
+  await w1.inbox.tick()
+  assert.deepEqual(groups(w1.ctx), { mail: ['m2'] }, 'the next read sees the other window\'s Done')
+  w1.inbox.dispose()
+  w2.inbox.dispose()
+})
+
+test('a Done, snooze, undo or restore whose write fails: a notice, the row unchanged, the next one works', async () => {
+  const store = fakeAppStorage()
+  const mail = mailFeed([item2('m1'), item2('m2', { time: NOW - 2 * HOUR })])
+  const { ctx, inbox } = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  const lastNotice = () => [...ctx.posts].reverse().find((m) => m.type === 'notice')
+  store.failNext('set')
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  assert.match(lastNotice().text, /^Done failed: appStorage\.set failed/)
+  // Read from memory (no reload from the store in between): the failed write was taken back.
+  const shown = () => inbox.snapshot().groups.flatMap((g) => g.rows.map((r) => r.id))
+  assert.deepEqual(shown(), ['m1', 'm2'], 'a Done never stored is not done here either')
+  assert.equal(ctx.lastState().undo, null)
+  store.failNext('set')
+  await ctx.sendPanel({ type: 'snooze', key: rowOf(ctx, 'm1').key, choice: '1h' })
+  assert.match(lastNotice().text, /^Snooze failed: /)
+  assert.deepEqual(shown(), ['m1', 'm2'])
+  // The queue goes on: the next Done works, then its undo and a restore fail and change nothing.
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  assert.deepEqual(groups(ctx), { mail: ['m2'] })
+  store.failNext('delete')
+  await ctx.sendPanel({ type: 'undo' })
+  assert.match(lastNotice().text, /^Undo failed: appStorage\.delete failed/)
+  assert.deepEqual(shown(), ['m2'])
+  const back = ctx.lastState().done.rows.find((r) => r.id === 'm1')
+  store.failNext('delete')
+  await ctx.sendPanel({ type: 'restore', key: back.key })
+  assert.match(lastNotice().text, /^Back to Inbox failed: /)
+  await ctx.sendPanel({ type: 'restore', key: back.key })
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm2'] })
+  // `ccc inbox done` reports the failure with exit 1.
+  store.failNext('set')
+  const r = await ctx.runCli(['done', 'bronos.mail:m1'])
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /^done failed: appStorage\.set failed/)
+  assert.deepEqual(groups(ctx), { mail: ['m1', 'm2'] })
+  assert.deepEqual(sourceCalls(mail), [])
+  inbox.dispose()
+})
+
+test('a woken snooze: a notify that rejects is logged, a failed mark is logged, the tick still publishes', async () => {
+  const store = fakeAppStorage()
+  const ctx = fakeCtx({ appStorage: store })
+  ctx.notify = async () => {
+    throw new Error('notifications off')
+  }
+  const { clock, inbox } = setup({ ctx, feeds: { 'bronos.chat': chatFeed([item2('c1')]) } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'snooze', key: rowOf(ctx, 'c1').key, choice: '1h' })
+  clock.t = NOW + HOUR + MIN
+  const posted = ctx.posts.length
+  store.failNext('set')
+  await inbox.tick()
+  await settle()
+  assert.deepEqual(groups(ctx), { chat: ['c1'] }, 'woken and published')
+  assert.ok(ctx.posts.length > posted)
+  const warns = ctx.logs.filter((l) => l[0] === 'warn').map((l) => l[1])
+  assert.ok(warns.some((w) => w === 'notify: notifications off'), warns.join('\n'))
+  assert.ok(warns.some((w) => /^state: appStorage\.set failed/.test(w)), warns.join('\n'))
+  // The mark was not stored, so the next tick tries again (the store works now) and stores it.
+  await inbox.tick()
+  await settle()
+  const e = [...store.map.values()].find((v) => v && v.id === 'c1')
+  assert.equal(e.notified, true)
+  inbox.dispose()
+})
+
+test('a first read whose storage fails still starts the panel', async () => {
+  const store = fakeAppStorage()
+  store.failNext('get', 3)
+  store.failNext('keys', 3)
+  const { ctx, inbox } = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await inbox.first
+  await settle()
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  inbox.dispose()
+})
+
+test('a heavy inbox: the state is cut to fit the post limit, said in the panel, and still posted', async () => {
+  const big = (id, o) =>
+    item2(id, {
+      title: `${id} ${'t'.repeat(290)}`,
+      preview: 'p'.repeat(1000),
+      labels: Array.from({ length: 20 }, (_, i) => `${'l'.repeat(36)}${i}`),
+      actions: [{ id: 'open', label: 'Open' }, ...Array.from({ length: 7 }, (_, i) => ({ id: `a${i}`, label: 'x'.repeat(40) }))],
+      ...o,
+    })
+  const many = (prefix, n) => Array.from({ length: n }, (_, i) => big(`${prefix}${i}`, { time: NOW - i * MIN, read: i % 2 === 0 }))
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mailFeed(many('m', 500)), 'bronos.chat': chatFeed(many('c', 500)), 'bronos.jira': jiraFeed(many('j', 500)) } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'search', query: 'ttt' })
+  const s = ctx.lastState()
+  assert.ok(JSON.stringify(s).length <= 800 * 1024, 'under the budget')
+  assert.match(s.limited, /too large to show in full/)
+  const rows = s.groups.flatMap((g) => g.rows)
+  assert.ok(rows.length > 0, 'rows still listed')
+  assert.ok(rows.every((r) => r.preview === undefined), 'previews dropped first')
+  const mail = s.groups.find((g) => g.id === 'mail')
+  assert.equal(mail.count, 250, 'the counts stay whole, so the panel says how many more')
+  assert.ok(mail.rows.length < 200)
+  assert.equal(ctx.logs.filter((l) => l[0] === 'error').length, 0)
+  // Back under the limit: the line goes.
+  await ctx.sendPanel({ type: 'search', query: '' })
+  ctx.emitFeed('bronos.mail', 'sync', { items: [item2('m1')], state: 'ok', asOf: NOW })
+  ctx.emitFeed('bronos.chat', 'sync', { items: [], state: 'ok', asOf: NOW })
+  ctx.emitFeed('bronos.jira', 'sync', { items: [], state: 'ok', asOf: NOW })
+  await settle()
+  assert.equal(ctx.lastState().limited, null)
+  inbox.dispose()
+})
+
+test('a group\'s open state is remembered app-wide: carried in the state, kept over a restart, junk ignored', async () => {
+  const store = fakeAppStorage()
+  const first = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await first.inbox.first
+  await settle()
+  assert.deepEqual(first.ctx.lastState().groupsOpen, {})
+  await first.ctx.sendPanel({ type: 'groupOpen', id: 'rest', open: true })
+  await first.ctx.sendPanel({ type: 'groupOpen', id: 'mail', open: false })
+  for (const junk of [{ id: 'nope', open: true }, { id: 'mail', open: 'yes' }, { id: '__proto__', open: true }, { id: 5, open: true }]) await first.ctx.sendPanel({ type: 'groupOpen', ...junk })
+  await first.ctx.sendPanel({ type: 'visible' })
+  assert.deepEqual(first.ctx.lastState().groupsOpen, { rest: true, mail: false })
+  first.inbox.dispose()
+  // A new window (or the next start) reads it.
+  const again = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await again.inbox.first
+  await settle()
+  await again.ctx.sendPanel({ type: 'hello' })
+  assert.deepEqual(again.ctx.lastState().groupsOpen, { rest: true, mail: false })
+  again.inbox.dispose()
 })

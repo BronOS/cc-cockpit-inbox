@@ -562,3 +562,30 @@ test('the cache writes of one batch run in parallel, onAnswer after all of them'
   assert.equal(answered.length, 1)
   assert.equal(answered[0].length, 5)
 })
+
+test('forget: an item gone between full placements is not asked, the rest of its lane still is', async () => {
+  const jev = fakeJev()
+  let release
+  const slow = jev.impl.grid
+  jev.impl.grid = async (...args) => {
+    await new Promise((r) => (release = r))
+    return slow(...args)
+  }
+  const { clock, j } = setup({ jev })
+  j.answer(urgent, it('bronos.gmail', 'first'))
+  await clock.advance(0) // 'first' in flight, holding the lane
+  j.answer(urgent, it('bronos.gmail', 'a'))
+  j.answer(urgent, it('bronos.gmail', 'b'))
+  j.answer(urgent, it('bronos.chat', 'a'))
+  assert.equal(j.pending(), 4)
+  j.forget('bronos.gmail', 'a')
+  j.forget('bronos.gmail', 'first') // in flight: finishes
+  assert.equal(j.pending(), 3)
+  release()
+  await clock.advance(0)
+  await clock.advance(2000)
+  release()
+  await clock.advance(0)
+  assert.deepEqual(jev.calls.map((c) => c.items.length), [1, 2])
+  assert.equal(j.pending(), 0)
+})

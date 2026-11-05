@@ -116,9 +116,12 @@ function resolve(rows, target) {
     if (!row) return { error: rows.length ? `No item ${n}: the list has ${rows.length} (ccc inbox).` : 'No item: the inbox is empty.' }
     return { row }
   }
-  const row = rows.find((r) => refOf(r) === target)
-  if (!row) return { error: `No item with ref "${oneLine(target, 80)}" in the list (ccc inbox shows the refs).` }
-  return { row }
+  // A ref is printable, so it is cut and cleaned (refOf): two ids that differ only past 120
+  // characters, or in control characters, print the same ref. Never pick one of those silently.
+  const hits = rows.filter((r) => refOf(r) === target)
+  if (!hits.length) return { error: `No item with ref "${oneLine(target, 80)}" in the list (ccc inbox shows the refs).` }
+  if (hits.length > 1) return { error: `The ref "${oneLine(target, 80)}" names ${hits.length} items: use the number from ccc inbox.` }
+  return { row: hits[0] }
 }
 
 /** "Tue 2026-11-03 14:00" in local time. */

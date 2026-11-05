@@ -211,3 +211,32 @@ test('a gone item keeps its Done entry until pruned; it stays done on return wit
   await st.prune(NOW + 15 * 24 * HOUR)
   assert.equal(st.status(v2('a'), NOW).hidden, false)
 })
+
+test('a load keeps this window\'s writes and deletes made while it ran', async () => {
+  const store = fakeAppStorage()
+  const st = createState(store)
+  await st.done(row('old'), NOW)
+  // Hold the load between its key list and its gets, then act: a Done, and a restore of a key the
+  // load already listed.
+  let release
+  const gate = new Promise((r) => (release = r))
+  const realKeys = store.keys
+  store.keys = async () => {
+    const ks = await realKeys()
+    await gate
+    return ks
+  }
+  const loading = st.load()
+  await new Promise((r) => setImmediate(r))
+  await st.done(row('new'), NOW)
+  await st.restore('bronos.mail', 'old')
+  store.keys = realKeys
+  release()
+  await loading
+  assert.equal(look(st, NOW, row('new')).hidden, true, 'the Done made during the load is kept')
+  assert.equal(look(st, NOW, row('old')).hidden, false, 'the restore made during the load is kept')
+  // The next load reads the store alone again.
+  await st.load()
+  assert.equal(look(st, NOW, row('new')).hidden, true)
+  assert.equal(st.entries().has(rankKey('bronos.mail', 'old')), false)
+})

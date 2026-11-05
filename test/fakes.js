@@ -183,22 +183,41 @@ function fakeJev(score = () => 0.9) {
   return jev
 }
 
-/** The app-wide store (ctx.appStorage), shared by two ctxs to play two windows. Calls are atomic, a get-then-set is not. */
+/**
+ * The app-wide store (ctx.appStorage), shared by two ctxs to play two windows. Calls are atomic, a
+ * get-then-set is not. `failNext(method, n = 1)` makes the next `n` calls of `get`, `set`, `delete`
+ * or `keys` reject (a storage hiccup: main busy, the file locked), for the host's error paths.
+ */
 function fakeAppStorage() {
   const store = new Map()
+  const failing = { get: 0, set: 0, delete: 0, keys: 0 }
+  const trip = (m) => {
+    if (failing[m] > 0) {
+      failing[m]--
+      throw new Error(`appStorage.${m} failed (test)`)
+    }
+  }
   return {
     map: store,
+    failNext(method, n = 1) {
+      if (!(method in failing)) throw new Error(`failNext: unknown method ${method}`)
+      failing[method] += n
+    },
     async get(k) {
+      trip('get')
       return store.has(k) ? structuredClone(store.get(k)) : undefined
     },
     async set(k, v) {
+      trip('set')
       if (typeof k !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(k)) throw new Error(`bad storage key ${k}`)
       store.set(k, structuredClone(v))
     },
     async delete(k) {
+      trip('delete')
       store.delete(k)
     },
     async keys() {
+      trip('keys')
       return [...store.keys()]
     },
     async increment(k, by = 1) {

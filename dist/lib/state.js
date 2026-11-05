@@ -74,27 +74,78 @@ function createState(store) {
   let entries = new Map()
   /** The undo token of this window's last Done. */
   let lastDone = null
+  /**
+   * This window's own writes and deletes while a load runs (rank key -> entry, or null for a
+   * delete), applied over what the load read before it swaps the map in. A load is one `keys()`
+   * then one `get` per entry, so a Done whose set lands after the key list was read, or a restore
+   * of a key already read, would otherwise be undone in memory until the next load (up to a
+   * minute: a Done item back on screen, a restored one still hidden). lib/jev.js keeps its own
+   * answers the same way. Null while no load runs; overlapping loads share it until the last ends.
+   */
+  let during = null
+  let loading = 0
 
-  async function load() {
-    const keys = (await store.keys()).filter((k) => k.startsWith(PREFIX))
-    const next = new Map()
-    for (const k of keys) {
-      const v = await store.get(k)
-      if (isEntry(v)) next.set(rankKey(v.pluginId, v.id), v)
-    }
-    entries = next
-    return entries
+  function note(key, entry) {
+    if (during) during.set(key, entry)
   }
 
+  async function load() {
+    if (!during) during = new Map()
+    const mine = during
+    loading++
+    try {
+      const keys = (await store.keys()).filter((k) => k.startsWith(PREFIX))
+      const next = new Map()
+      for (const k of keys) {
+        const v = await store.get(k)
+        if (isEntry(v)) next.set(rankKey(v.pluginId, v.id), v)
+      }
+      for (const [key, entry] of mine) {
+        if (entry) next.set(key, entry)
+        else next.delete(key)
+      }
+      entries = next
+      return entries
+    } finally {
+      if (--loading === 0) during = null
+    }
+  }
+
+  /** `key` back to `before` (an entry or undefined) when it still holds `mine`: a write that failed. */
+  function putBack(key, mine, before) {
+    if (entries.has(key) ? entries.get(key) !== mine : mine !== null) return
+    if (before) entries.set(key, before)
+    else entries.delete(key)
+    note(key, before || null)
+  }
+
+  // Memory first (the panel is redrawn from it at once), then the store. A store call that fails
+  // puts memory back, so a Done that was never stored does not hide the item here only until the
+  // next load, and the caller's error (the panel's notice) is the whole story.
   async function write(entry) {
     const key = rankKey(entry.pluginId, entry.id)
+    const before = entries.get(key)
     entries.set(key, entry)
-    await store.set(storageKey(entry.pluginId, entry.id), entry)
+    note(key, entry)
+    try {
+      await store.set(storageKey(entry.pluginId, entry.id), entry)
+    } catch (e) {
+      putBack(key, entry, before)
+      throw e
+    }
   }
 
   async function remove(pluginId, id) {
-    entries.delete(rankKey(pluginId, id))
-    await store.delete(storageKey(pluginId, id))
+    const key = rankKey(pluginId, id)
+    const before = entries.get(key)
+    entries.delete(key)
+    note(key, null)
+    try {
+      await store.delete(storageKey(pluginId, id))
+    } catch (e) {
+      putBack(key, null, before)
+      throw e
+    }
   }
 
   /** What this entry says about the item now: hidden, its bonus, back with something new. */

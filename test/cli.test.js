@@ -44,9 +44,9 @@ test('list: hostile and long titles stay one clean, cut line; at most 50 rows', 
   assert.ok(lines.length <= 50 * 2 + 3, 'rows, their reasons and the group headers')
   assert.match(lines[0], /^Inbox: \d+ items/)
   const h = lines.find((l) => l.includes('FAKE'))
-  assert.ok(h.length < 220)
+  // Controls become spaces, runs of space one, the title cut to MAX_TITLE (120) with the ellipsis.
+  assert.equal(h, `1. [CHAT] Hi FAKE 9. [CHAT] urgent x [31m ${'z'.repeat(87)}… (1h) bronos.chat:h`)
   assert.ok(lines.every((l) => l.length < 260))
-  assert.ok(h.includes('…'))
   inbox.dispose()
 })
 
@@ -195,7 +195,8 @@ test('why: a disabled rule and a Jev rule without a cached answer are said plain
   const jevRule = { id: 'j', name: 'Urgent\nFAKE', enabled: true, group: 'now', jev: { question: 'Is this urgent?', min: 0.8 } }
   const off = { id: 'off', enabled: false, group: 'now', when: [{ field: 'sourceKind', op: 'is', value: 'mail' }] }
   const saved = await inbox.saveSettings({ ...base, rules: [off, jevRule, ...base.rules] })
-  assert.ok(saved === undefined || saved.ok !== false, JSON.stringify(saved))
+  assert.deepEqual(saved.rules.slice(0, 2).map((r) => r.id), ['off', 'j'], JSON.stringify(saved))
+  assert.equal(saved.rules.length, base.rules.length + 2)
   const out = (await ctx.runCli(['why', 'bronos.mail:m/1:x'])).stdout
   assert.match(out, /rule 1 → Now: disabled/)
   assert.match(out, /rule 2 \(Urgent FAKE\) → Now: (pending|unavailable)/)
@@ -240,4 +241,31 @@ test('why and act failures: control, bidi and C1 bytes from item values or a sou
 
 test('oneLine strips bidi overrides, isolates and zero-width characters', () => {
   assert.equal(C.oneLine('a‮b⁦c​d﻿e', 20), 'a b c d e')
+})
+
+test('a ref that two items print alike is refused, never picked silently', () => {
+  const long = 'x'.repeat(130)
+  const rows = [
+    { pluginId: 'bronos.chat', id: `${long}a`, title: 'A' },
+    { pluginId: 'bronos.chat', id: `${long}b`, title: 'B' },
+  ]
+  const ref = C.refOf(rows[0])
+  assert.equal(ref, C.refOf(rows[1]), 'cut at 120: the same ref')
+  assert.match(C.resolve(rows, ref).error, /names 2 items: use the number/)
+  assert.equal(C.resolve(rows, '2').row.title, 'B')
+})
+
+test('done and snooze of an item done since the list was read: an error, no false success', async () => {
+  const { ctx, inbox } = setup(two())
+  await ctx.runCli([])
+  // Done elsewhere (another window, a panel click) after the person read the list.
+  const key = inbox.groups().flatMap((g) => g.rows).find((r) => r.item.id === 'c1').key
+  await ctx.sendPanel({ type: 'done', key })
+  for (const argv of [['done', 'bronos.chat:c1'], ['snooze', 'bronos.chat:c1', '1h']]) {
+    const r = await ctx.runCli(argv)
+    assert.equal(r.code, 1, argv.join(' '))
+    assert.equal(r.stdout, undefined)
+    assert.match(r.stderr, /No item with ref/)
+  }
+  inbox.dispose()
 })

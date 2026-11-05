@@ -90,6 +90,11 @@ test('groups: counts, Rest collapsed unless opened, the remembered open state, e
   const opened = R.viewModel(s, { filter: 'all', open: { rest: true, now: false } })
   assert.deepEqual(opened.groups.map((g) => g.open), [false, true])
   assert.deepEqual(R.selectableKeys(opened), ['p.chat\u0000r1', 'p.chat\u0000r2'])
+  // The host's memory (another window, the last start) applies; this page's own click wins over it.
+  const remembered = { ...s, groupsOpen: { rest: true, now: false } }
+  assert.deepEqual(R.viewModel(remembered, { filter: 'all', open: {} }).groups.map((g) => g.open), [false, true])
+  assert.deepEqual(R.viewModel(remembered, { filter: 'all', open: { now: true } }).groups.map((g) => g.open), [true, true])
+  assert.deepEqual(R.viewModel({ ...s, groupsOpen: ['junk'] }, { filter: 'all', open: {} }).groups.map((g) => g.open), [true, false])
   // The host sends 200 rows a group: the rest is counted.
   const big = R.viewModel(stateOf({ groups: [group('mail', [row('m1')], { count: 250 })], sources: [source('p.chat')] }), { filter: 'all' })
   assert.equal(big.groups[0].more, 249)

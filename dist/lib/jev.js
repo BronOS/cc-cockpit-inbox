@@ -346,6 +346,22 @@ function createJev({ store, services, onAnswer = () => {}, now = () => Date.now(
     return out
   }
 
+  /**
+   * Drop the queued requests and the parked ref of one item that left its feed. A full placement
+   * does this in `sweep`; an incremental one (an `item`, `gone` or `sync` event) runs no sweep, so
+   * without this a request queued for an item gone before its batch would still be asked. Calls in
+   * flight finish (their answer is cached and costs nothing more).
+   */
+  function forget(pluginId, id) {
+    for (const [question, lane] of lanes) {
+      for (const [k, r] of [...lane.queue]) if (r.pluginId === pluginId && r.id === id) lane.queue.delete(k)
+      if (lane.queue.size || lane.inFlight.size) continue
+      if (lane.timer !== null) T.clear(lane.timer)
+      lanes.delete(question)
+    }
+    for (const [k, v] of [...parked]) if (v.pluginId === pluginId && v.id === id) parked.delete(k)
+  }
+
   /** "Test" on the settings page: the cached answer or `'pending'` (not asked yet); never a request. */
   function cachedAnswer(rule, item) {
     const question = rule && rule.jev && rule.jev.question
@@ -383,7 +399,7 @@ function createJev({ store, services, onAnswer = () => {}, now = () => Date.now(
   /** Requests waiting or in flight, for tests and the host's status. */
   const pending = () => [...lanes.values()].reduce((n, l) => n + l.queue.size + l.inFlight.size, 0)
 
-  return { load, answer, cachedAnswer, sweep, prune, dispose, pending, available }
+  return { load, answer, cachedAnswer, sweep, forget, prune, dispose, pending, available }
 }
 
 module.exports = {
