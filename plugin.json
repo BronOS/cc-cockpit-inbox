@@ -26,7 +26,7 @@
       }
     ],
     "settings": {
-      "page": { "entry": "settings/index.html", "scopes": ["app"] }
+      "page": { "entry": "settings/index.html", "scopes": ["app", "project"] }
     }
   },
   "services": {

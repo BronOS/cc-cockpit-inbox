@@ -179,6 +179,17 @@ test('what the page says: summaries, notes, test results, source rows, dirty', (
 
 // ---- lib/settings.js: the strict check of a save ----
 
+test('a project page: the switch only in project scope, the set read-only while it uses the global rules', () => {
+  assert.deepEqual(L.pageMode('app', false), { switch: false, editable: true })
+  assert.deepEqual(L.pageMode('app', true), { switch: false, editable: true }, 'an app page always edits')
+  assert.deepEqual(L.pageMode('project', true), { switch: true, editable: false })
+  assert.deepEqual(L.pageMode('project', false), { switch: true, editable: true })
+  assert.deepEqual(L.groupLine({ id: 'rest', name: 'Rest', collapsed: true, badge: false }), { name: 'Rest', meta: 'built in · collapsed' })
+  assert.deepEqual(L.groupLine({ id: 'now', name: 'Now', collapsed: false, badge: true }), { name: 'Now', meta: 'badge' })
+  assert.equal(L.agendaText('bottom'), 'Below the list')
+  assert.equal(L.SET_TEXT.confirm, "Discard this project's rules and use the global ones?")
+})
+
 test('checkSettings: the defaults and the editor drafts pass; Rest is put last', () => {
   assert.deepEqual(S.checkSettings(S.defaults()), { ok: true, settings: S.defaults() })
   const d = S.defaults()
@@ -247,7 +258,8 @@ test('host: the page gets the settings, the field table, the defaults, the sourc
   const page = ctx.openSettingsPage()
   await page.send({ type: 'ready' })
   const m = page.last('settings')
-  assert.deepEqual(Object.keys(m).sort(), ['defaults', 'jev', 'saved', 'settings', 'sources', 'table', 'type'])
+  assert.deepEqual(Object.keys(m).sort(), ['defaults', 'jev', 'saved', 'scope', 'settings', 'sources', 'table', 'type'])
+  assert.equal(m.scope, 'app')
   assert.equal(m.saved, false)
   assert.deepEqual(m.settings, S.defaults())
   assert.deepEqual(m.defaults, S.defaults())
@@ -397,15 +409,120 @@ test('host: Test of a Jev rule uses cached answers only and never asks Jev', asy
   inbox.dispose()
 })
 
-test('host: a page for another scope is told the settings are app-wide; the listener goes on dispose', async () => {
+test('host: a page of a scope the app never gives is refused; the listener goes on dispose', async () => {
   const { ctx, inbox } = setup()
   await inbox.first
-  const page = ctx.openSettingsPage('project')
+  const page = ctx.openSettingsPage('window')
   await page.send({ type: 'ready' })
-  assert.deepEqual(page.posts, [{ type: 'fatal', reason: "Inbox's settings are app-wide: edit them under Settings > Plugins." }])
+  assert.deepEqual(page.posts, [{ type: 'fatal', reason: 'Inbox has no settings here: edit them under Settings > Plugins or This Project.' }])
   assert.equal(ctx.live().settingsPage, 1)
   inbox.dispose()
   assert.equal(ctx.live().settingsPage, 0)
+})
+
+// ---- the project scope: use the global rules, or the project's own ----
+
+const bossSet = () => {
+  let { draft, id } = L.addGroup(S.defaults(), 'Boss')
+  draft = L.addRule(draft, TABLE).draft
+  draft = L.setRule(draft, 'r1', { group: id })
+  return L.setCondition(draft, 'r1', 0, { field: 'from.address', op: 'is', value: 'lead@example.com' }, TABLE)
+}
+
+test('host, project scope: with no set of its own the page gets the global set, marked useGlobal; a save is refused', async () => {
+  const { ctx, inbox } = setup()
+  const global = { ...S.defaults(), agenda: 'bottom' }
+  await ctx.appStorage.set(S.KEY, global)
+  await inbox.first
+  const page = ctx.openSettingsPage('project')
+  await page.send({ type: 'ready' })
+  const m = page.last('settings')
+  assert.deepEqual(Object.keys(m).sort(), ['defaults', 'jev', 'saved', 'scope', 'settings', 'sources', 'table', 'type', 'useGlobal'])
+  assert.equal(m.scope, 'project')
+  assert.equal(m.useGlobal, true)
+  assert.deepEqual(m.settings, global)
+  await page.send({ type: 'save', settings: bossSet() })
+  assert.match(page.last('refused').reason, /uses the global rules/)
+  assert.equal(await ctx.storage.get(S.KEY), undefined, 'nothing stored in the project')
+  assert.deepEqual(await ctx.appStorage.get(S.KEY), global, 'nor the global set changed')
+  assert.equal(inbox.settingsSet(), 'global')
+  inbox.dispose()
+})
+
+test('host, project scope: switching off copies the stored global set (never one from the page); saves then go to the project only', async () => {
+  const { ctx, inbox } = setup()
+  const global = { ...S.defaults(), agenda: 'bottom' }
+  await ctx.appStorage.set(S.KEY, global)
+  await inbox.first
+  const page = ctx.openSettingsPage('project')
+  await page.send({ type: 'ready' })
+  await page.send({ type: 'useGlobal', on: false, settings: bossSet() })
+  let m = page.last('settings')
+  assert.equal(m.saved, true)
+  assert.equal(m.useGlobal, false)
+  assert.deepEqual(m.settings, global)
+  assert.deepEqual(await ctx.storage.get(S.KEY), global, 'the copy is the global set, not the settings the message carried')
+  assert.equal(inbox.settingsSet(), 'project')
+  // A second "off" (another page, a double click) keeps the project's set.
+  await page.send({ type: 'save', settings: bossSet() })
+  await page.send({ type: 'useGlobal', on: false })
+  assert.deepEqual(await ctx.storage.get(S.KEY), bossSet())
+  m = page.last('settings')
+  assert.deepEqual(m.settings, bossSet())
+  assert.deepEqual(await ctx.appStorage.get(S.KEY), global, 'the global set is untouched')
+  assert.deepEqual(inbox.settings(), bossSet())
+  // The app's page of the same window still edits the global set.
+  page.close()
+  const app = ctx.openSettingsPage('app')
+  await app.send({ type: 'ready' })
+  assert.deepEqual(app.last('settings').settings, global)
+  assert.equal(app.last('settings').useGlobal, undefined)
+  inbox.dispose()
+})
+
+test('host, project scope: switching back on deletes the project set; the global set applies again', async () => {
+  const { ctx, inbox } = setup()
+  await ctx.storage.set(S.KEY, bossSet())
+  await inbox.first
+  assert.equal(inbox.settingsSet(), 'project')
+  const page = ctx.openSettingsPage('project')
+  await page.send({ type: 'ready' })
+  assert.equal(page.last('settings').useGlobal, false)
+  assert.deepEqual(page.last('settings').settings, bossSet())
+  await page.send({ type: 'useGlobal', on: true })
+  const m = page.last('settings')
+  assert.equal(m.useGlobal, true)
+  assert.deepEqual(m.settings, S.defaults())
+  assert.equal(await ctx.storage.get(S.KEY), undefined)
+  assert.equal(inbox.settingsSet(), 'global')
+  assert.deepEqual(inbox.settings(), S.defaults())
+  inbox.dispose()
+})
+
+test('host: useGlobal from an app page, or with no boolean, does nothing', async () => {
+  const { ctx, inbox } = setup()
+  await inbox.first
+  const app = ctx.openSettingsPage('app')
+  await app.send({ type: 'useGlobal', on: false })
+  assert.equal(app.posts.length, 0)
+  app.close()
+  const page = ctx.openSettingsPage('project')
+  await page.send({ type: 'useGlobal', on: 'no' })
+  await page.send({ type: 'useGlobal' })
+  assert.equal(page.posts.length, 0)
+  assert.equal(await ctx.storage.get(S.KEY), undefined)
+  inbox.dispose()
+})
+
+test('host, project scope: a failing project store is a refused switch with the reason', async () => {
+  const { ctx, inbox } = setup()
+  await inbox.first
+  const page = ctx.openSettingsPage('project')
+  ctx.storage.failNext('set')
+  await page.send({ type: 'useGlobal', on: false })
+  assert.match(page.last('refused').reason, /^Saving failed: appStorage.set failed/)
+  assert.equal(inbox.settingsSet(), 'global')
+  inbox.dispose()
 })
 
 test('host: an app without ctx.settingsPage still runs', async () => {

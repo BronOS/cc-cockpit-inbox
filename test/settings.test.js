@@ -158,3 +158,55 @@ test('save stores the clean value; load reads it back; reset stores the defaults
   assert.deepEqual(await S.resetSettings(store), S.defaults())
   assert.deepEqual(await S.loadSettings(store), S.defaults())
 })
+
+// ---- a project's own set (design-v2 "Rules" › "Per project") ----
+
+const mine = () => v2({ groups: [{ id: 'boss', name: 'Boss' }], rules: [{ id: 'b', group: 'boss', when: [{ field: 'from.address', op: 'is', value: 'lead@example.com' }] }], agenda: 'off' })
+
+test('effective settings: no override is the global set; a valid one is the project set, whole', () => {
+  const global = v2({ agenda: 'bottom' })
+  assert.deepEqual(S.effectiveSettings(global, undefined), { settings: S.readSettings(global), set: 'global' })
+  assert.deepEqual(S.effectiveSettings(undefined, undefined), { settings: S.defaults(), set: 'global' })
+  const e = S.effectiveSettings(global, mine())
+  assert.equal(e.set, 'project')
+  assert.deepEqual(e.settings, S.readSettings(mine()))
+  // Whole: none of the global groups or rules leak in, the project's agenda wins.
+  assert.deepEqual(e.settings.groups.map((g) => g.id), ['boss', 'rest'])
+  assert.deepEqual(e.settings.rules.map((r) => r.id), ['b'])
+  assert.equal(e.settings.agenda, 'off')
+})
+
+test('effective settings: a damaged override counts as none (the global set, not the defaults) and says why', () => {
+  const global = v2({ agenda: 'bottom' })
+  for (const [raw, why] of [
+    [null, 'not an object'],
+    ['x', 'not an object'],
+    [[], 'not an object'],
+    [{ groups: [], rules: [] }, 'not a version 2 set'],
+    [{ version: 1, calendar: { position: 'off' } }, 'not a version 2 set'],
+    [{ version: '2', groups: [], rules: [] }, 'not a version 2 set'],
+    [{ version: 2, groups: 'no', rules: [] }, 'groups or rules not a list'],
+    [{ version: 2, groups: [], agenda: 'off' }, 'groups or rules not a list'],
+  ]) {
+    assert.deepEqual(S.effectiveSettings(global, raw), { settings: S.readSettings(global), set: 'global', damaged: why }, JSON.stringify(raw))
+    assert.deepEqual(S.readOverride(raw), { settings: null, damaged: why })
+  }
+  assert.deepEqual(S.readOverride(undefined), { settings: null })
+  // A v2 set with a bad entry is repaired like the global one: the entry goes, the set stays.
+  const repaired = S.readOverride({ ...mine(), rules: [...mine().rules, { id: 'bad' }] })
+  assert.deepEqual(repaired.settings.rules.map((r) => r.id), ['b'])
+  assert.equal(repaired.damaged, undefined)
+})
+
+test('override store: save validates, load reads back, clear drops it; the global store is not touched', async () => {
+  const project = fakeAppStorage()
+  assert.deepEqual(await S.loadOverride(project), { settings: null })
+  const saved = await S.saveOverride(project, { ...mine(), junk: 1 })
+  assert.deepEqual(saved, S.readSettings(mine()))
+  assert.deepEqual(await project.get(S.KEY), saved)
+  assert.deepEqual(await S.loadOverride(project), { settings: saved })
+  await S.clearOverride(project)
+  assert.equal(await project.get(S.KEY), undefined)
+  assert.deepEqual(await S.loadOverride(project), { settings: null })
+  assert.deepEqual(S.SET_NAMES, { global: 'the global rules', project: "this project's rules" })
+})

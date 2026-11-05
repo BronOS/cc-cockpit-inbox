@@ -652,3 +652,67 @@ test('a group\'s open state is remembered app-wide: carried in the state, kept o
   assert.deepEqual(again.ctx.lastState().groupsOpen, { rest: true, mail: false })
   again.inbox.dispose()
 })
+
+// ---- a project's own rule set (design-v2 "Rules" › "Per project") ----
+
+const bossRules = (agenda = 'off') => ({
+  version: 2,
+  groups: [{ id: 'boss', name: 'Boss' }, { id: 'rest', name: 'Rest', collapsed: true }],
+  rules: [{ id: 'b', enabled: true, group: 'boss', when: [{ field: 'from.address', op: 'is', value: 'lead@example.com' }] }],
+  agenda,
+})
+
+test("a project's own set places this window's items at once; another project keeps the global set; Done stays app-wide", async () => {
+  const store = fakeAppStorage()
+  const items = () => [item2('m1', { extra: { from: { name: 'Lead', address: 'lead@example.com' } } }), item2('m2')]
+  const work = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed(items()) } })
+  const home = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed(items()) } })
+  await Promise.all([work.inbox.first, home.inbox.first])
+  await settle()
+  assert.deepEqual(groups(work.ctx), { mail: ['m1', 'm2'] })
+  await work.inbox.saveProjectSettings(bossRules())
+  await settle()
+  assert.deepEqual(groups(work.ctx), { boss: ['m1'], rest: ['m2'] }, 'every item placed again by the project set')
+  assert.equal(rowOf(work.ctx, 'm1').reason, 'rule 1: from.address is lead@example.com')
+  assert.deepEqual(work.ctx.slotPlacements.at(-1), null, "the project's agenda (off) moved the slot")
+  assert.equal(work.ctx.lastState().agenda, 'off')
+  await home.inbox.tick()
+  assert.deepEqual(groups(home.ctx), { mail: ['m1', 'm2'] }, 'the other project still uses the global set')
+  // A global change reaches the project that uses it, not the one with its own set.
+  await home.inbox.saveSettings({ ...S.defaults(), rules: [] })
+  await settle()
+  await work.inbox.tick()
+  assert.deepEqual(groups(work.ctx), { boss: ['m1'], rest: ['m2'] })
+  assert.deepEqual(groups(home.ctx), { rest: ['m1', 'm2'] })
+  // Done is per item, app-wide: whatever set placed it.
+  await work.ctx.sendPanel({ type: 'done', key: rowOf(work.ctx, 'm1').key })
+  await home.inbox.tick()
+  assert.deepEqual(groups(home.ctx), { rest: ['m2'] })
+  // Back to the global set: placed again by it.
+  await work.inbox.useGlobalSettings()
+  await settle()
+  assert.deepEqual(groups(work.ctx), { rest: ['m2'] })
+  assert.equal(work.inbox.settingsSet(), 'global')
+  work.inbox.dispose()
+  home.inbox.dispose()
+})
+
+test('a project set written to the store is picked up on the next read like a global change; a damaged one is logged once and the global set applies', async () => {
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mailFeed([item2('m1', { extra: { from: { name: 'Lead', address: 'lead@example.com' } } })]) } })
+  await ctx.storage.set(S.KEY, 'junk')
+  await inbox.first
+  await settle()
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  assert.equal(inbox.settingsSet(), 'global')
+  await inbox.tick()
+  const damaged = ctx.logs.filter((l) => l[0] === 'warn' && /project rules: the stored set is damaged \(not an object\)/.test(l[1]))
+  assert.equal(damaged.length, 1, 'logged once over two reads')
+  await ctx.storage.set(S.KEY, bossRules('bottom'))
+  await inbox.tick()
+  assert.deepEqual(groups(ctx), { boss: ['m1'] })
+  assert.deepEqual(ctx.slotPlacements.at(-1), [{ type: 'agenda', position: 'bottom', height: 140 }])
+  await ctx.storage.delete(S.KEY)
+  await ctx.sendPanel({ type: 'visible' })
+  assert.deepEqual(groups(ctx), { mail: ['m1'] })
+  inbox.dispose()
+})

@@ -23,7 +23,9 @@
 //
 // The settings page (settings/index.html, `ctx.settingsPage`) edits a draft and sends it whole: the
 // host checks every save with lib/settings.js `checkSettings` and refuses one that does not fit with
-// the reason, stores and applies one that does. It also answers the page's "Test" of one rule over the
+// the reason, stores and applies one that does. App scope edits the global set (ctx.appStorage),
+// project scope this project's own (ctx.storage) or switches it back to the global; the set in force
+// is the project's own when it has one (applyEffective). Done, snooze and the Jev answers stay app-wide. It also answers the page's "Test" of one rule over the
 // items it holds now, with cached Jev answers only (never a request). The page gets the settings, the
 // field table, the sources (label, scope, state, count) and whether a `jev` provider is there; Inbox
 // has no secrets, and nothing else goes to it.
@@ -154,8 +156,16 @@ function createInbox(ctx, opts = {}) {
 
   const call = (p, what) => withTimeout(p, callMs, what)
   const state = createState(ctx.appStorage)
-  let settings = S.defaults()
+  // Two sets (design-v2 "Rules" › "Per project"): the global one (ctx.appStorage) and this project's
+  // own (ctx.storage, null: use the global). `settings` is the effective one, the only one placement,
+  // the agenda, the panel and `ccc inbox` read; `settingsSet` names it (`global` or `project`).
+  let globalSettings = S.defaults()
+  let projectSettings = null
+  let settings = globalSettings
+  let settingsSet = 'global'
   let settingsJson = JSON.stringify(settings)
+  // The last damaged override logged, so a bad value is logged once, not on every minute's read.
+  let damagedLogged = null
 
   /** key → `{ item, placement }` of every visible item; an entry stays while its item object does. */
   const placed = new Map()
@@ -459,8 +469,14 @@ function createInbox(ctx, opts = {}) {
 
   // ---- settings and shared state ----
 
-  /** Settings that differ from the current ones: every item placed again, the agenda moved. */
-  function applySettings(next) {
+  /**
+   * The effective set from the two: this project's own when it has one, else the global. One that
+   * differs from the current: every item placed again, the agenda moved. Changing only which set is
+   * in force (the same content) places nothing again; `why` names the new one at once.
+   */
+  function applyEffective() {
+    const next = projectSettings || globalSettings
+    settingsSet = projectSettings ? 'project' : 'global'
     const json = JSON.stringify(next)
     if (json === settingsJson) return
     settings = next
@@ -470,11 +486,46 @@ function createInbox(ctx, opts = {}) {
     schedulePublish()
   }
 
-  /** Validate and store settings (the settings page), applied in this window at once. Resolves what was stored. */
+  /** A new global set (read or saved). */
+  function applyGlobal(next) {
+    globalSettings = next
+    applyEffective()
+  }
+
+  /** This project's own set (read or saved), or null to use the global one. */
+  function applyProject(next) {
+    projectSettings = next
+    applyEffective()
+  }
+
+  /** The stored override of this project, validated; a damaged one is logged once and counts as none. */
+  async function loadProject() {
+    const o = await S.loadOverride(ctx.storage)
+    if (o.damaged && o.damaged !== damagedLogged) ctx.log.warn(`project rules: the stored set is damaged (${o.damaged}); the global rules apply`)
+    damagedLogged = o.damaged || null
+    return o.settings
+  }
+
+  /** Validate and store the global settings (the app's settings page), applied in this window at once. Resolves what was stored. */
   async function saveSettings(raw) {
     const s = await S.saveSettings(ctx.appStorage, raw)
-    applySettings(s)
+    applyGlobal(s)
     return s
+  }
+
+  /** Validate and store this project's own set (its settings page), applied at once. Resolves what was stored. */
+  async function saveProjectSettings(raw) {
+    const s = await S.saveOverride(ctx.storage, raw)
+    damagedLogged = null
+    applyProject(s)
+    return s
+  }
+
+  /** Drop this project's own set: the global rules apply again, every item placed by them. */
+  async function useGlobalSettings() {
+    await S.clearOverride(ctx.storage)
+    damagedLogged = null
+    applyProject(null)
   }
 
   /** The remembered open states of groups that exist now (a deleted group's entry is dropped). */
@@ -498,13 +549,27 @@ function createInbox(ctx, opts = {}) {
     }
   }
 
-  /** What other windows may have written: settings, Done and snooze, now and then the Jev answers. */
-  async function reloadShared() {
+  /**
+   * Both sets (the global one: another window may have saved it; this project's: read the same way,
+   * though only this project's page writes it), what other windows may have written: Done and
+   * snooze, now and then the Jev answers.
+   */
+  async function readSettings() {
     try {
-      applySettings(await S.loadSettings(ctx.appStorage))
+      globalSettings = await S.loadSettings(ctx.appStorage)
     } catch (e) {
       ctx.log.warn(`settings: ${why(e)}`)
     }
+    try {
+      projectSettings = await loadProject()
+    } catch (e) {
+      ctx.log.warn(`project settings: ${why(e)}`)
+    }
+    applyEffective()
+  }
+
+  async function reloadShared() {
+    await readSettings()
     // After the settings: only ids of groups that exist are kept.
     try {
       const raw = await ctx.appStorage.get(OPEN_KEY)
@@ -775,6 +840,15 @@ function createInbox(ctx, opts = {}) {
 
   const testId = (m) => (typeof m.ruleId === 'string' ? m.ruleId.slice(0, S.MAX_ID_LENGTH) : '')
 
+  /**
+   * The settings page's backend. Its scope comes from the app (`page.scope`), never from a message:
+   * `app` (Settings > Plugins) edits the global set; `project` (This Project) edits this project's own
+   * set, or shows the global one read-only while the project uses it (`useGlobal`). In project scope
+   * `useGlobal { on: false }` copies the stored global set into the project (the host reads it, the
+   * page sends no settings) and `{ on: true }` deletes the override (the page asked the person
+   * first); a save while the project uses the global rules is refused, so a stale page cannot write
+   * the global set into a project, nor a project's page the global set.
+   */
   function onSettingsPage(page) {
     const send = (m) => {
       try {
@@ -783,28 +857,51 @@ function createInbox(ctx, opts = {}) {
         ctx.log.warn(`settings page: ${why(e)}`)
       }
     }
-    const sendSettings = (saved) => send({ type: 'settings', saved, settings, table: TABLE, defaults: S.defaults(), sources: pageSources(), jev: jev.available() })
+    const scope = page.scope === 'app' || page.scope === 'project' ? page.scope : null
+    const sendSettings = (saved) => {
+      const extra = scope === 'project' ? { useGlobal: projectSettings === null } : {}
+      const shown = scope === 'project' ? projectSettings || globalSettings : globalSettings
+      send({ type: 'settings', scope, ...extra, saved, settings: shown, table: TABLE, defaults: S.defaults(), sources: pageSources(), jev: jev.available() })
+    }
     let closed = false
     page.onClose(() => {
       closed = true
     })
-    if (page.scope !== 'app') {
-      send({ type: 'fatal', reason: "Inbox's settings are app-wide: edit them under Settings > Plugins." })
+    if (!scope) {
+      send({ type: 'fatal', reason: 'Inbox has no settings here: edit them under Settings > Plugins or This Project.' })
       return
     }
     page.onMessage(async (m) => {
       if (!isObj(m) || typeof m.type !== 'string') return
       try {
         if (m.type === 'ready') {
-          // Another window may have saved since this one last read: the page starts from the stored value.
-          applySettings(await S.loadSettings(ctx.appStorage))
+          // Another window may have saved since this one last read: the page starts from the stored values.
+          await readSettings()
           sendSettings(false)
           // The sources are still being read: send them again once they are.
           if (!started) void first.then(() => !closed && sendSettings(false))
         } else if (m.type === 'save') {
           const checked = S.checkSettings(m.settings)
           if (!checked.ok) return send({ type: 'refused', reason: checked.reason })
-          await saveSettings(checked.settings)
+          if (scope === 'app') await saveSettings(checked.settings)
+          else {
+            // Read again first: this window's copy may be older than the store (another page's switch).
+            projectSettings = await loadProject()
+            if (projectSettings === null) {
+              applyEffective()
+              sendSettings(false)
+              return send({ type: 'refused', reason: 'This project uses the global rules: turn off "Use the global rules" to give it its own.' })
+            }
+            await saveProjectSettings(checked.settings)
+          }
+          sendSettings(true)
+        } else if (m.type === 'useGlobal' && scope === 'project' && typeof m.on === 'boolean') {
+          if (m.on) await useGlobalSettings()
+          else {
+            await readSettings()
+            // Already its own (a second click, another page): kept, never overwritten by the global.
+            if (projectSettings === null) await saveProjectSettings(globalSettings)
+          }
           sendSettings(true)
         } else if (m.type === 'test') {
           send({ type: 'test', ruleId: testId(m), result: testRule(m.settings, m.ruleId) })
@@ -812,7 +909,7 @@ function createInbox(ctx, opts = {}) {
       } catch (e) {
         ctx.log.warn(`settings page ${m.type}: ${why(e)}`)
         if (m.type === 'test') send({ type: 'test', ruleId: testId(m), result: { ok: false, reason: why(e) } })
-        else send({ type: 'refused', reason: `${m.type === 'save' ? 'Saving' : 'That'} failed: ${why(e)}` })
+        else send({ type: 'refused', reason: `${m.type === 'save' || m.type === 'useGlobal' ? 'Saving' : 'That'} failed: ${why(e)}` })
       }
     })
   }
@@ -861,7 +958,9 @@ function createInbox(ctx, opts = {}) {
       clearTimeout(timer)
       build(now())
       const rows = cliRows()
-      if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now()) }
+      // The list names the set only when it is this project's own (the usual case says nothing new);
+      // `why` always names it.
+      if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now(), settingsSet === 'project' ? S.SET_NAMES.project : null) }
       if (p.cmd === 'undo') {
         // Same window as the panel's toast: after it the entry is not offered any more.
         if (!lastUndo || now() >= lastUndo.until) return { stderr: `Nothing to undo (undo lasts ${UNDO_MS / 1000} seconds after a done or snooze).\n`, code: 1 }
@@ -881,7 +980,7 @@ function createInbox(ctx, opts = {}) {
         // The same pass as the row, from cached Jev answers only: asking is the sweep's job, not a read's.
         const t = now()
         const tr = traceItem(settings, row.item, { now: t, kindOf: (id) => descOf(id).kind, jevAnswer: jev.cachedAnswer })
-        return { stdout: CLI.formatWhy(row, tr.text) }
+        return { stdout: CLI.formatWhy(row, tr.text, S.SET_NAMES[settingsSet]) }
       }
       try {
         if (p.cmd === 'act') {
@@ -925,6 +1024,8 @@ function createInbox(ctx, opts = {}) {
     dispose,
     act: onPanelMessage,
     saveSettings,
+    saveProjectSettings,
+    useGlobalSettings,
     testRule,
     snapshot: () => {
       build(now())
@@ -932,6 +1033,7 @@ function createInbox(ctx, opts = {}) {
     },
     groups: () => build(now()).groups,
     settings: () => settings,
+    settingsSet: () => settingsSet,
     state,
     jev,
   }

@@ -42,8 +42,11 @@ Jev answers are cached per question and item version (a new message asks again).
 pending the row says "Jev…" and moves at most once when the answer comes; with Jev unavailable the
 rule counts as not holding and is tried again later.
 
-Rules are app-wide. The default list: read items go to Rest; Chat mentions and direct messages go to
-Now; then each source to its own group.
+The rules are global by default, the same in every project. A project can have its own set instead
+(groups, rules and agenda together), for example work projects with Jira and a rule for mail from
+your lead, and personal ones without: see Settings below. Done, snooze and Jev's answers are shared
+by every project either way. The default list: read items go to Rest; Chat mentions and direct
+messages go to Now; then each source to its own group.
 
 ## Done, snooze, undo
 
@@ -65,6 +68,12 @@ current items a rule would place, with examples; Jev rules use cached answers on
 half-typed rule is never applied. A source is kept out with a rule (`source is X` to Rest) or in that
 plugin's own settings.
 
+The page under Settings > Plugins edits the global rules. Under This Project it starts with **Use the
+global rules**: on (the default) it shows the global set read-only; turn it off and the project gets
+a copy of the global set to edit as its own; turn it back on (it asks first) and the project's set is
+discarded. `ccc inbox why` says which set placed an item ("by the global rules" or "by this
+project's rules").
+
 ## Keys
 
 `j` / `k` move, `Enter` opens (the source plugin's own view), `e` done, `s` snooze then `1` to `4`,
@@ -78,7 +87,7 @@ ccc inbox open <n|ref>            open an item in its own plugin
 ccc inbox act <n|ref> <action>    run one of the item's own actions (markRead, ...)
 ccc inbox done <n|ref>            mark it done
 ccc inbox undo                    take back the last done or snooze (6 seconds)
-ccc inbox why <n|ref>             the full trace: every rule, and why it did not hold
+ccc inbox why <n|ref>             the full trace: the rule set, every rule, and why it did not hold
 ccc inbox snooze <n|ref> <when>   1h, afternoon, tomorrow or changes
 ccc inbox help
 ```

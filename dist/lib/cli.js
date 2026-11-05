@@ -53,11 +53,13 @@ const refOf = (row) => `${row.calendar ? CAL_REF : oneLine(row.pluginId, 80)}:${
 /**
  * The list as the groups hold it: a header per non-empty group, then its numbered rows with the reason
  * (the rule that placed the row) under each. Rows come in group order; the first MAX_ROWS are shown.
+ * `setName` goes in the first line when given (the host gives it for a project's own rules only).
  */
-function formatList(rows, now) {
+function formatList(rows, now, setName = null) {
   if (!rows.length) return 'Inbox zero.\n'
+  const by = setName ? ` by ${oneLine(setName, 40)}` : ''
   const shown = rows.slice(0, MAX_ROWS)
-  const out = [`Inbox: ${rows.length} item${rows.length === 1 ? '' : 's'}${rows.length > shown.length ? ` (first ${shown.length} shown)` : ''}`]
+  const out = [`Inbox: ${rows.length} item${rows.length === 1 ? '' : 's'}${by}${rows.length > shown.length ? ` (first ${shown.length} shown)` : ''}`]
   const totals = new Map()
   for (const r of rows) totals.set(r.groupId, (totals.get(r.groupId) || 0) + 1)
   let last = null
@@ -72,10 +74,14 @@ function formatList(rows, now) {
   return `${out.join('\n')}\n`
 }
 
-/** The trace for \`why\`: the item, then one bounded line per rule and the placement. */
-function formatWhy(row, traceText) {
+/**
+ * The trace for \`why\`: the item, the set that placed it (`setName`: "the global rules" or "this
+ * project's rules"), then one bounded line per rule and the placement.
+ */
+function formatWhy(row, traceText, setName = null) {
   const lines = String(traceText).split('\n')
   const out = [`${oneLine(row.title, MAX_TITLE)} (${refOf(row)})`]
+  if (setName) out.push(`by ${oneLine(setName, 40)}:`)
   for (const l of lines.slice(0, MAX_TRACE_LINES)) out.push(oneLine(l, MAX_REASON))
   if (lines.length > MAX_TRACE_LINES) out.push(`… ${lines.length - MAX_TRACE_LINES} more lines`)
   return `${out.join('\n')}\n`

@@ -3,8 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <title>Inbox settings</title>
-    <!-- Inbox's settings page (contributes.settings.page, scope app; docs/design-v2.md "Settings page"):
-      groups, rules, the sources (read-only) and where the agenda goes. The page CSP allows script from
+    <!-- Inbox's settings page (contributes.settings.page, scopes app and project; docs/design-v2.md
+      "Settings page"): groups, rules, the sources (read-only) and where the agenda goes; on a project's
+      page also the "Use the global rules" switch. The page CSP allows script from
       this plugin's own files only, so the logic lives in index.js; logic.js holds its pure parts. The
       SDK gives `ccPanel` (the port to dist/host.js), the theme variables and the component stylesheet
       (`ccc guide style`: .cc-toolbar, .cc-card, .cc-list, .cc-row, .cc-field, .cc-badge,

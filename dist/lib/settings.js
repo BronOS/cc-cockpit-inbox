@@ -1,7 +1,8 @@
 'use strict'
-// Inbox v2's settings (design-v2 "Rules" › "Format"): groups, rules and where the agenda goes. They
-// live in ctx.appStorage under one key, not in a manifest settings schema (the rules editor is an
-// html settings page, and one Inbox means one set of rules in every window). Read through
+// Inbox v2's settings (design-v2 "Rules" › "Format"): groups, rules and where the agenda goes. The
+// global set lives in ctx.appStorage under one key, not in a manifest settings schema (the rules
+// editor is an html settings page); a project may override it whole in its ctx.storage (below,
+// "a project's own set"). Read through
 // `readSettings` every time: a bad write (an older or newer Inbox, a hand edit) never breaks the
 // panel.
 //
@@ -280,4 +281,83 @@ async function resetSettings(store) {
   return saveSettings(store, defaults())
 }
 
-module.exports = { KEY, VERSION, AGENDA, CAPS, ID, MAX_ID_LENGTH, defaults, readSettings, checkSettings, conditionProblem, loadSettings, saveSettings, resetSettings }
+// ---- a project's own set (design-v2 "Rules" › "Per project") ----
+//
+// A project may override the whole set (groups, rules and agenda as one unit: rules name group ids, so
+// a project's rules cannot be mixed with the global groups). It lives in that project's ctx.storage
+// under the same key, written only by this project's settings page; absent means "use the global
+// rules". It is validated on every read like the global one, with one difference: a value that is not
+// a v2 set at all (not an object, no version 2 or later, groups or rules not lists) is damaged and
+// counts as absent, so the project falls back to the global rules instead of to the defaults, which
+// would silently replace the person's global rules in that project. A v2 set with bad entries is
+// repaired like the global one (readSettings drops the entry, not the set).
+
+/** Why a stored override is not a v2 set, or null when it is one. */
+function overrideProblem(raw) {
+  if (!isObj(raw)) return 'not an object'
+  const version = own(raw, 'version')
+  if (typeof version !== 'number' || !(version >= VERSION)) return 'not a version 2 set'
+  if (!Array.isArray(own(raw, 'groups')) || !Array.isArray(own(raw, 'rules'))) return 'groups or rules not a list'
+  return null
+}
+
+/**
+ * A stored project override: `{ settings }` (null when there is none), plus `damaged` (the reason)
+ * when one is stored but is not a v2 set (then `settings` is null: use the global rules).
+ */
+function readOverride(raw) {
+  if (raw === undefined) return { settings: null }
+  const problem = overrideProblem(raw)
+  if (problem) return { settings: null, damaged: problem }
+  return { settings: readSettings(raw) }
+}
+
+/**
+ * The set that places this project's items: its override when it has a valid one, else the global
+ * set. `set` names it (`project` or `global`, for `ccc inbox why` and the page); `damaged` is passed on.
+ */
+function effectiveSettings(globalRaw, overrideRaw) {
+  const o = readOverride(overrideRaw)
+  if (o.settings) return { settings: o.settings, set: 'project' }
+  return { settings: readSettings(globalRaw), set: 'global', ...(o.damaged ? { damaged: o.damaged } : {}) }
+}
+
+/** The project override from ctx.storage (see readOverride). */
+async function loadOverride(store) {
+  return readOverride(await store.get(KEY))
+}
+
+/** Store a project's own set (validated as a save); resolves what was stored. */
+async function saveOverride(store, raw) {
+  return saveSettings(store, raw)
+}
+
+/** Drop a project's own set: the project uses the global rules again. */
+async function clearOverride(store) {
+  await store.delete(KEY)
+}
+
+/** What a set is called where it is named (`ccc inbox why`, the list header). */
+const SET_NAMES = Object.freeze({ global: 'the global rules', project: "this project's rules" })
+
+module.exports = {
+  KEY,
+  VERSION,
+  AGENDA,
+  CAPS,
+  ID,
+  MAX_ID_LENGTH,
+  SET_NAMES,
+  defaults,
+  readSettings,
+  checkSettings,
+  conditionProblem,
+  loadSettings,
+  saveSettings,
+  resetSettings,
+  readOverride,
+  effectiveSettings,
+  loadOverride,
+  saveOverride,
+  clearOverride,
+}

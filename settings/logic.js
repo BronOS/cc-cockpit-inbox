@@ -392,6 +392,35 @@ function sourceRow(s) {
   return { label: str(s.label) || str(s.pluginId), id: str(s.pluginId), badge: str(s.badge), meta: meta.join(' · '), problem: state !== 'ok' }
 }
 
+// ---- a project's page (scope `project`) ----
+
+/** The words of the project page's "Use the global rules" switch, by its state. */
+const SET_TEXT = Object.freeze({
+  switchLabel: 'Use the global rules',
+  global: 'These are the global rules, used by every project that has none of its own. Edit them under Settings > Plugins > Inbox, or turn the switch off to give this project its own copy.',
+  project: "This project has its own groups, rules and agenda; the global rules do not apply here. Turn the switch on to drop them and use the global ones again.",
+  confirm: "Discard this project's rules and use the global ones?",
+  confirmButton: 'Discard and use the global rules',
+})
+
+/** What the page shows, from the scope the host told it: the switch, and whether the set is editable. */
+function pageMode(scope, useGlobal) {
+  if (scope !== 'project') return { switch: false, editable: true }
+  return { switch: true, editable: useGlobal !== true }
+}
+
+/** A group in the read-only view: its name, then its flags. */
+function groupLine(g) {
+  const flags = [g.id === REST_ID ? 'built in' : null, g.collapsed ? 'collapsed' : null, g.badge ? 'badge' : null].filter(Boolean)
+  return { name: str(g.name), meta: flags.join(' · ') }
+}
+
+/** The agenda position in words. */
+function agendaText(agenda) {
+  const c = AGENDA_CHOICES.find((x) => x.value === agenda)
+  return c ? c.label : str(agenda)
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     REST_ID,
@@ -434,5 +463,9 @@ if (typeof module !== 'undefined' && module.exports) {
     ruleNote,
     testText,
     sourceRow,
+    SET_TEXT,
+    pageMode,
+    groupLine,
+    agendaText,
   }
 }

@@ -42,7 +42,7 @@ test('the manifest: id, api, entry points exist, the CLI, the panel with the age
   assert.deepEqual(manifest.contributes.cli.map((c) => c.name), ['inbox'])
   assert.match(manifest.description, /cc-cockpit 0\.10\.0/)
   const page = manifest.contributes.settings.page
-  assert.deepEqual(page, { entry: 'settings/index.html', scopes: ['app'] })
+  assert.deepEqual(page, { entry: 'settings/index.html', scopes: ['app', 'project'] })
   assert.ok(fs.existsSync(path.join(ROOT, page.entry)))
   assert.equal(manifest.contributes.settings.app, undefined, 'no schema form: the rules editor is the page')
 })

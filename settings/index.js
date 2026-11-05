@@ -12,9 +12,15 @@
 // redrawn after the field's `change`, and after the event, so a Tab out of the field lands where it
 // was going.
 //
-// Host messages: `settings { settings, saved, table, defaults, sources, jev }`, `refused { reason }`,
-// `test { ruleId, result }`, `fatal { reason }`. Page messages: `ready`, `save { settings }`,
-// `test { settings, ruleId }`.
+// The scope comes from the host (`settings.scope`, which it took from the app, not from this page):
+// `app` edits the global set; `project` adds the "Use the global rules" switch. On (`useGlobal`, no
+// set of the project's own) the global set is shown read-only; turning it off asks the host to copy
+// the global set into the project, which then edits it here; turning it back on asks the person
+// first, inline (a sandboxed page has no confirm()), then asks the host to drop the project's set.
+//
+// Host messages: `settings { scope, useGlobal?, settings, saved, table, defaults, sources, jev }`,
+// `refused { reason }`, `test { ruleId, result }`, `fatal { reason }`. Page messages: `ready`,
+// `save { settings }`, `test { settings, ruleId }`, `useGlobal { on }` (project scope).
 
 const page = {
   saved: null,
@@ -29,6 +35,12 @@ const page = {
   tests: {},
   sent: null,
   fatal: null,
+  scope: null,
+  useGlobal: false,
+  /** The switch was turned on and the page asks "Discard this project's rules…?". */
+  confirming: false,
+  /** A `useGlobal` is on its way to the host. */
+  switching: false,
 }
 const PALETTE = ['green', 'red', 'blue', 'amber', 'violet', 'grey']
 const $ = (id) => document.getElementById(id)
@@ -91,7 +103,8 @@ function later() {
 function renderBar() {
   const bar = $('bar')
   bar.textContent = ''
-  if (!page.draft) return
+  bar.hidden = !pageMode(page.scope, page.useGlobal).editable
+  if (!page.draft || bar.hidden) return
   const dirty = isDirty(page.draft, page.saved)
   bar.append(
     el('span', { class: 'status cc-muted', role: 'status', text: page.status === 'Saving…' || !dirty ? page.status : 'Unsaved changes' }),
@@ -346,6 +359,75 @@ function agendaCard() {
     box)
 }
 
+// ---- a project's page: the switch, and the global set read-only ----
+
+function askUseGlobal(on) {
+  page.switching = true
+  page.confirming = false
+  page.error = null
+  page.status = on ? 'Switching to the global rules…' : 'Copying the global rules…'
+  later()
+  ccPanel.post({ type: 'useGlobal', on })
+}
+
+function setCard() {
+  const sw = el('input', {
+    type: 'checkbox',
+    role: 'switch',
+    id: 'use-global',
+    'data-f': 'use-global',
+    checked: page.useGlobal || page.confirming,
+    disabled: page.switching,
+    onchange: () => {
+      if (sw.checked) {
+        // Back to the global rules drops this project's set: asked first.
+        page.confirming = true
+        later()
+      } else askUseGlobal(false)
+    },
+  })
+  const card = el('section', { class: 'cc-card' },
+    el('h3', { class: 'cc-card-title', text: 'Rule set' }),
+    el('div', { class: 'cc-field' }, el('label', { for: 'use-global' }, sw, SET_TEXT.switchLabel)),
+    el('span', { class: 'cc-help', text: page.useGlobal ? SET_TEXT.global : SET_TEXT.project }))
+  if (page.switching) card.append(el('p', { class: 'cc-muted', role: 'status', text: page.status }))
+  if (page.confirming) {
+    card.append(el('div', { class: 'line', role: 'alertdialog', 'aria-label': SET_TEXT.confirm },
+      el('span', { text: SET_TEXT.confirm }),
+      btn(SET_TEXT.confirmButton, () => askUseGlobal(true), { cls: 'cc-danger', f: 'use-global-yes' }),
+      btn('Cancel', () => {
+        page.confirming = false
+        later()
+      }, { cls: 'cc-ghost', f: 'use-global-no' })))
+  }
+  return card
+}
+
+function readonlyGroupsCard(d) {
+  const list = el('ul', { class: 'cc-list cc-compact', 'aria-label': 'Groups' })
+  for (const g of d.groups) {
+    const m = groupLine(g)
+    list.append(el('li', { class: 'cc-row' }, el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.name }), m.meta ? el('span', { class: 'cc-row-meta', text: m.meta }) : null)))
+  }
+  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Groups' }), list)
+}
+
+function readonlyRulesCard(d) {
+  const list = el('ol', { class: 'cc-list', 'aria-label': 'Rules' })
+  d.rules.forEach((rule, i) => {
+    const note = ruleNote(rule, page.jevOn)
+    const main = el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: rule.name ? `${rule.name}: ${ruleSummary(rule, d)}` : ruleSummary(rule, d) }))
+    if (note) main.append(el('span', { class: 'cc-row-meta', text: note }))
+    list.append(el('li', { class: `cc-row rule-row${rule.enabled ? '' : ' off'}` }, el('span', { class: 'num', text: String(i + 1) }), main))
+  })
+  const body = d.rules.length ? list : el('div', { class: 'cc-empty' }, el('p', { text: 'No rules: every item goes to Rest.' }))
+  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Rules' }), body)
+}
+
+function readonlyAgendaCard(d) {
+  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Agenda' }), el('p', { text: agendaText(d.agenda) }))
+}
+
 // ---- render ----
 
 function render() {
@@ -367,7 +449,10 @@ function render() {
   if (page.open && !page.draft.rules.some((r) => r.id === page.open)) page.open = null
   renderBar()
   if (page.error) error.append(el('div', { class: 'cc-error-line', role: 'alert', text: page.error }))
-  main.append(groupsCard(), rulesCard(), sourcesCard(), agendaCard())
+  const mode = pageMode(page.scope, page.useGlobal)
+  if (mode.switch) main.append(setCard())
+  if (mode.editable) main.append(groupsCard(), rulesCard(), sourcesCard(), agendaCard())
+  else main.append(readonlyGroupsCard(page.draft), readonlyRulesCard(page.draft), sourcesCard(), readonlyAgendaCard(page.draft))
   if (focus) {
     const n = document.querySelector(`[data-f="${CSS.escape(focus)}"]`)
     if (n && !n.disabled) n.focus({ preventScroll: true })
@@ -383,11 +468,18 @@ ccPanel.onMessage((m) => {
     page.defaults = m.defaults || null
     page.sources = Array.isArray(m.sources) ? m.sources : []
     page.jevOn = m.jev === true
+    page.scope = m.scope === 'project' ? 'project' : 'app'
+    const wasGlobal = page.useGlobal
+    page.useGlobal = page.scope === 'project' && m.useGlobal === true
+    // The switch moved (here or on another page): the set shown is another one, so the draft follows it.
+    if (page.useGlobal !== wasGlobal) page.sent = null
+    page.switching = false
+    if (page.useGlobal !== wasGlobal || m.saved === true) page.confirming = false
     // A save's answer, or nothing edited yet: the draft is what is stored now. Edits in progress are
     // kept over a later read (the sources arriving).
     // A draft edited since Save was pressed stays (only the stored copy moves on).
     const editedSince = m.saved === true && page.sent && page.draft && isDirty(page.draft, page.sent)
-    if ((m.saved === true && !editedSince) || wasClean) page.draft = draftOf(m.settings)
+    if ((m.saved === true && !editedSince) || wasClean || page.useGlobal !== wasGlobal) page.draft = draftOf(m.settings)
     if (m.saved === true) page.sent = null
     if (m.saved === true) {
       page.status = 'Saved'
@@ -396,6 +488,7 @@ ccPanel.onMessage((m) => {
     render()
   } else if (m.type === 'refused') {
     page.status = ''
+    page.switching = false
     page.error = `Not saved: ${String(m.reason || 'refused')}`
     render()
   } else if (m.type === 'test' && typeof m.ruleId === 'string') {

@@ -170,7 +170,8 @@ with the same `rev` stays done.
 
 ### Format
 
-Stored in `ctx.appStorage` under `settings` (one key, validated on every read, as v1):
+The global set is stored in `ctx.appStorage` under `settings` (one key, validated on every read, as v1); a project may
+override it whole (see "Per project" below):
 
 ```ts
 interface InboxSettings {
@@ -204,6 +205,25 @@ interface Condition { field: Field; op: Op; value: string | number | boolean | n
 
 String comparisons are case-insensitive (NFKC, lower case). No regular expressions (the app's ReDoS rule; plain
 substring and prefix cover the cases so far). `in` lists hold at most 50 values.
+
+### Per project (decision 8)
+
+A project may have its own set: the whole `InboxSettings` (groups, rules and agenda as one unit, since rules name
+group ids and cannot be mixed with another set's groups), stored in that project's `ctx.storage` under `settings`.
+No key there means **use the global rules** (the default). The set in force in a window is the project's own when it has
+one, else the global set; placement, the groups, the agenda slot, Jev rules, the panel and `ccc inbox list/why` all read
+that effective set, and `why` names it ("by the global rules:" or "by this project's rules:"; `list` says "by this
+project's rules" in its header only for a project's own set).
+
+- Validated on every read like the global one. A stored value that is not a v2 set at all (not an object, no version 2
+  or later, groups or rules not lists) is damaged: logged once, and the project uses the global rules (not the defaults,
+  which would silently replace the person's rules there). A v2 set with a bad entry is repaired as the global one is.
+- Both are read at start, every minute (`tick`), when the panel says `hello` or `visible`, and when the settings page
+  opens; a save on either page applies in this window at once. A change that alters the effective set places every
+  item again (as a rules edit always did); switching to an override with the same content places nothing again.
+- Stay app-wide, whatever set placed an item: Done and snooze (lib/state.js), the Jev answer cache (`jv:` keys; an answer
+  belongs to a question and an item, not to a set) and the panel's remembered group open states (`ui:groupsOpen`, keyed
+  by group id, so a project's groups share the entry of a global group with the same id).
 
 ### Evaluation
 
@@ -282,8 +302,8 @@ the content is there (design-next §3.4). Buttons in the app's toolbar:
 
 ## Settings page (12)
 
-Inbox has no schema form; its settings are one html page (`contributes.settings.page`, scope `app`) inside the app's
-central Settings, with the component stylesheet:
+Inbox has no schema form; its settings are one html page (`contributes.settings.page`, scopes `app` and `project`)
+inside the app's central Settings, with the component stylesheet:
 
 - **Groups**: add, rename, reorder, delete (its rules move to Rest), collapsed by default, counts toward the badge.
 - **Rules**: the ordered list (move up and down, enable, duplicate, delete); each rule edited inline: its group, then
@@ -293,7 +313,14 @@ central Settings, with the component stylesheet:
   (`source is X` → Rest) or in that plugin's own settings.
 - **Agenda**: top, bottom, off.
 
-Rules are app-wide (one Inbox in every window). The panel draws no settings.
+Opened under Settings > Plugins (scope `app`) the page edits the global set. Opened under This Project (scope
+`project`) it starts with a **Use the global rules** switch (a checkbox with `role="switch"`: the component stylesheet
+has no switch): on (the default, no set of the project's own) it shows the global set read-only, with a line saying
+it is the global one and that it is edited under Settings > Plugins; off copies the stored global set into the
+project (the host reads it, the page sends no settings) and the page then edits the project's set; turning it back on
+asks first, inline ("Discard this project's rules and use the global ones?"; a sandboxed page has no `confirm()`), then
+deletes the project's set. The host takes the scope from the app (`page.scope`), never from a message, and refuses a
+project save while the project uses the global rules. The panel draws no settings.
 
 ## CLI
 
@@ -386,7 +413,9 @@ All accepted as recommended (Oleg, 2026-11-04).
 5. Jev cache keyed by `rev` (a new message re-asks) or by item only? Recommended: by `rev`.
 6. Add `due?: number` to the item for "due within N days" rules? Recommended: not now; `due:` label.
 7. Per-source on/off in Inbox settings? Recommended: no; a rule to Rest, or the source's own setting.
-8. Rules per project as well as app-wide? Recommended: app-wide only.
+8. Rules per project as well as app-wide? Recommended: app-wide only. **Changed (Oleg, 2026-11-05)**: a project may
+   override the whole set (groups, rules, agenda) in its `ctx.storage`, with "use the global rules" as the default; work
+   and personal projects need different sources and rules. Done, snooze and the Jev cache stay app-wide ("Per project").
 9. Calendar invitations as `inbox-feed` items (Accept / Decline actions)? Recommended: later; agenda slot only now.
 10. "In the Inbox" marks in source panels (decision 15, optional): an `inbox` service with placements by id? Recommended: later.
 11. App: warn on the Plugins page when a provider's major differs from a collector's? Recommended: yes, in the same app release.
@@ -395,7 +424,7 @@ All accepted as recommended (Oleg, 2026-11-04).
 ## As built (0.2.0)
 
 - `ccc inbox`: `list` prints a header per non-empty group with its count, each row numbered across groups, and the
-  placing rule's reason on a line under it; at most 50 rows. `why` runs `traceItem` over the current settings with
+  placing rule's reason on a line under it; at most 50 rows. `why` runs `traceItem` over the effective settings with
   cached Jev answers only (it never asks Jev), cut to 60 lines. `undo` honours the 6 s window of the panel's toast.
   `act` checks the action id shape here and the item's list of actions in the host. `snooze` is as in v1.
 - Snooze keeps v1's fixed times (1 h, 14:00, 09:00, until it changes); the settings have no snooze fields.
