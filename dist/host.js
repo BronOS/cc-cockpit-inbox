@@ -1,7 +1,7 @@
 'use strict'
 // Inbox (bronos.inbox): one ranked list of every `inbox-feed` provider with today's calendar
 // (docs/design.md). The host reads the providers through ctx.services (never their storage), ranks
-// with lib/rank.js, keeps done and snooze in app storage (lib/state.js) and posts one `state`
+// with lib/v1.js (until host v2), keeps done and snooze in app storage (lib/state.js) and posts one `state`
 // message to the panel; the panel only renders and asks.
 //
 // Refresh: a provider's `changed` event re-reads that source (debounced, a provider that emits after
@@ -17,9 +17,9 @@
 // URL from the page as it is.
 
 const { describeOf, itemsOf, featuresOf, calDayOf, calUpcomingOf, httpsUrl } = require('./lib/feed')
-const { rank, DEFAULT_RULES } = require('./lib/rank')
+const { rank, DEFAULT_RULES } = require('./lib/v1')
 const { createState, untilOf } = require('./lib/state')
-const S = require('./lib/settings')
+const S = require('./lib/v1')
 const CLI = require('./lib/cli')
 
 const PANEL = 'main'

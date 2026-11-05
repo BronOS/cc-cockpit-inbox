@@ -2,7 +2,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const L = require('../panels/settingslogic')
-const { readSettings, DEFAULTS } = require('../dist/lib/settings')
+const { readSettings, DEFAULTS } = require('../dist/lib/v1')
 
 const providers = [
   { pluginId: 'bronos.chat', label: 'Chat', color: 'green', kind: 'chat', markRead: true, on: true, items: 10, weight: 30, weightSet: false },

@@ -23,8 +23,8 @@ const SEEN_EVERY_MS = 24 * 3600000
 const KEY_OK = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const PART_OK = /^[A-Za-z0-9._-]{1,200}$/
 
-// The rank key of an item: one rule for both files.
-const { keyOf: rankKey } = require('./rank')
+// The item key: one rule with rules.js (sorting, traces) and the host.
+const { keyOf: rankKey } = require('./rules')
 
 /**
  * The storage key of an item: `st:<pluginId>:<id>` when that fits the store's rule, else
