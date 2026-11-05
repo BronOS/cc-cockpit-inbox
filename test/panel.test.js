@@ -1,122 +1,212 @@
 'use strict'
-// The panel's pure parts (rowlogic.js, timeline.js) and a guard on main.js: provider text only ever
-// goes in through textContent. Local time is Berlin so the strip and the clocks are checkable.
+// The panel v2's pure parts (panels/rowlogic.js) over the host's `state` v2 shape, and a guard on
+// main.js: provider text only ever goes in through textContent. Local time is Berlin so the clocks
+// are checkable.
 process.env.TZ = 'Europe/Berlin'
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const R = require('../panels/rowlogic')
-const T = require('../panels/timeline')
 
 const NOW = Date.parse('2026-11-03T13:42:00+01:00')
 const MIN = 60000
 const HOUR = 60 * MIN
-const row = (id, o = {}) => ({ key: `p.${o.src || 'chat'}\u0000${id}`, pluginId: `p.${o.src || 'chat'}`, id, badge: 'CHAT', color: 'green', title: `T ${id}`, from: 'Ann Example', where: 'DM', at: NOW - 4 * MIN, level: 'action', unread: true, why: 'w', ...o })
 
-test('list: the first 9, FYI divider above the first fyi shown, the rest behind Show all', () => {
-  const rows = [...Array.from({ length: 6 }, (_, i) => row(`a${i}`)), ...Array.from({ length: 6 }, (_, i) => row(`f${i}`, { level: 'fyi' }))]
-  const m = R.listModel(rows, 'all', false)
-  assert.equal(m.items.length, 9)
-  assert.equal(m.rest, 3)
-  assert.deepEqual(m.items.filter((x) => x.divider).map((x) => x.row.id), ['f0'])
-  assert.equal(R.listModel(rows, 'all', true).items.length, 12)
-  // A filter shows one source.
-  const mixed = [row('c1'), row('m1', { src: 'mail' })]
-  assert.deepEqual(R.listModel(mixed, 'p.mail', false).items.map((x) => x.row.id), ['m1'])
-  assert.deepEqual(R.listModel([], 'all', false), { items: [], rest: 0, total: 0 })
+/** A row as dist/host.js `rowOut` sends it. */
+const row = (id, o = {}) => ({
+  key: `p.${o.src || 'chat'}\u0000${id}`,
+  source: `p.${o.src || 'chat'}`,
+  id,
+  title: `T ${id}`,
+  preview: 'first line',
+  time: NOW - 4 * MIN,
+  from: { name: 'Ann Example', address: 'ann@example.com' },
+  place: { kind: 'channel', name: 'general' },
+  labels: [],
+  read: false,
+  actions: [{ id: 'markRead', label: 'Mark read' }],
+  canOpen: true,
+  badge: 'CHAT',
+  color: 'green',
+  label: 'Chat',
+  reason: 'rule 4: sourceKind is chat',
+  jev: null,
+  ...o,
+})
+const source = (pluginId, o = {}) => ({ pluginId, label: pluginId.slice(2), badge: 'X', color: 'blue', kind: 'other', state: 'ok', message: null, error: null, stale: false, asOf: null, loaded: true, refused: 0, overCap: 0, count: 0, shown: 0, ...o })
+const group = (id, rows, o = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), collapsed: false, badge: true, count: rows.length, unread: 0, rows, ...o })
+const stateOf = (o = {}) => ({ type: 'state', version: 2, now: NOW, groups: [], sources: [], done: { count: 0, rows: [] }, search: null, undo: null, agenda: 'top', ...o })
+
+test('rows: badge, title, from · place · time, the preview first line, three labels, the reason', () => {
+  const m = R.rowModel(row('c1', { preview: 'hello there\nsecond line', labels: ['alert', 'mention:all', 'jira:PROJ-12', 'fourth'] }), NOW)
+  assert.equal(m.badge, 'CHAT')
+  assert.equal(m.color, 'green')
+  assert.equal(m.source, 'Chat')
+  assert.equal(m.title, 'T c1')
+  assert.equal(m.meta, 'Ann Example · general · 4m')
+  assert.equal(m.preview, 'hello there')
+  assert.deepEqual(m.labels, ['alert', 'mention:all', 'jira:PROJ-12'])
+  assert.equal(m.reason, 'rule 4: sourceKind is chat')
+  assert.equal(m.unread, true)
+  assert.equal(m.canOpen, true)
+  // A project with a status, an address-only sender, read state null (no read state: not unread).
+  const j = R.rowModel(row('PROJ-12', { from: { address: 'lead@example.com' }, place: { kind: 'project', name: 'PROJ', status: 'In review' }, read: null, time: NOW - 3 * HOUR }), NOW)
+  assert.equal(j.meta, 'lead@example.com · PROJ · In review · 3h')
+  assert.equal(j.unread, false)
+  // Nothing but a title.
+  const bare = R.rowModel({ key: 'k', title: 'Only', actions: [] }, NOW)
+  assert.deepEqual([bare.meta, bare.preview, bare.labels, bare.reason, bare.badge, bare.color, bare.canOpen], ['', '', [], '', 'FEED', 'grey', false])
 })
 
-test('chips: All counts items but not the calendar pin; problems and the Done & snoozed count', () => {
-  const state = {
-    rows: [row('c1'), { key: 'cal\u0000e1', calendar: true, id: 'e1' }],
-    chips: [{ pluginId: 'p.chat', label: 'Chat', count: 1, color: 'green' }, { pluginId: 'p.jira', label: 'Jira', count: 0, color: 'blue', problem: 'Jira: signed out' }],
-    today: [{}, {}],
+test('row actions: the source actions without open, then Done and Snooze; marks for back and search hits', () => {
+  const m = R.rowModel(row('c1', { actions: [{ id: 'open', label: 'Open' }, { id: 'markRead', label: 'Mark read' }, { id: 'done', label: 'Archive' }] }), NOW)
+  assert.deepEqual(m.actions.map((a) => [a.id, a.label, a.own]), [
+    ['markRead', 'Mark read', false],
+    ['done', 'Archive', false],
+    ['done', 'Done', true],
+    ['snooze', 'Snooze', true],
+  ])
+  assert.deepEqual(R.rowModel(row('b', { back: true }), NOW).marks, ['back: new activity'])
+  const hit = R.rowModel(row('d', { done: true }), NOW)
+  assert.deepEqual(hit.marks, ['done'])
+  assert.deepEqual(hit.actions.map((a) => a.id), ['markRead'], 'a done hit has no Done or Snooze')
+  assert.deepEqual(R.rowModel(row('s', { snoozed: true }), NOW).marks, ['snoozed'])
+  // A pending Jev answer shows in the reason the rules wrote.
+  assert.match(R.rowModel(row('j', { jev: 'pending', reason: 'rule 6: sourceKind is chat · rule 2: Jev…' }), NOW).reason, /Jev…/)
+})
+
+test('groups: counts, Rest collapsed unless opened, the remembered open state, empty groups left out', () => {
+  const s = stateOf({
+    groups: [group('now', [row('a')]), group('chat', []), group('rest', [row('r1'), row('r2')], { collapsed: true, badge: false })],
+    sources: [source('p.chat', { shown: 3 })],
+  })
+  const m = R.viewModel(s, { filter: 'all', open: {} })
+  assert.equal(m.kind, 'groups')
+  assert.deepEqual(m.groups.map((g) => [g.id, g.count, g.open]), [['now', 1, true], ['rest', 2, false]])
+  assert.equal(m.empty, null)
+  // Rest's rows are not on the keyboard's way while it is closed.
+  assert.deepEqual(R.selectableKeys(m), ['p.chat\u0000a'])
+  const opened = R.viewModel(s, { filter: 'all', open: { rest: true, now: false } })
+  assert.deepEqual(opened.groups.map((g) => g.open), [false, true])
+  assert.deepEqual(R.selectableKeys(opened), ['p.chat\u0000r1', 'p.chat\u0000r2'])
+  // The host sends 200 rows a group: the rest is counted.
+  const big = R.viewModel(stateOf({ groups: [group('mail', [row('m1')], { count: 250 })], sources: [source('p.chat')] }), { filter: 'all' })
+  assert.equal(big.groups[0].more, 249)
+})
+
+test('chips: All, one per source with its shown count and a problem mark, Done; a source filter', () => {
+  const s = stateOf({
+    groups: [group('now', [row('a'), row('m', { src: 'mail' })]), group('rest', [row('r')], { count: 5 })],
+    sources: [source('p.chat', { label: 'Chat', color: 'green', shown: 2 }), source('p.mail', { label: 'Mail', color: 'violet; x', shown: 1, state: 'signedOut' })],
+    done: { count: 3, rows: [] },
+  })
+  assert.deepEqual(R.chipsModel(s, 'p.mail'), [
+    { filter: 'all', label: 'All', count: 7, on: false },
+    { filter: 'p.chat', label: 'Chat', count: 2, color: 'green', problem: false, on: false },
+    { filter: 'p.mail', label: 'Mail', count: 1, color: 'grey', problem: true, on: true },
+    { filter: 'done', label: 'Done', count: 3, on: false },
+  ])
+  const m = R.viewModel(s, { filter: 'p.mail' })
+  assert.deepEqual(m.groups.map((g) => [g.id, g.count, g.rows.map((r) => r.id)]), [['now', 1, ['m']]])
+  assert.equal(R.chipFilter('all', 'done'), 'done')
+  assert.equal(R.chipFilter('done', 'done'), 'all')
+  assert.equal(R.chipFilter('p.chat', 'p.chat'), 'all')
+  assert.equal(R.chipFilter('done', 'p.chat'), 'p.chat')
+  assert.equal(R.chipFilter('all', 'all'), 'all')
+  // A filter on a source that left goes back to All.
+  assert.equal(R.validFilter(s, 'p.gone'), 'all')
+  assert.equal(R.validFilter(s, 'p.chat'), 'p.chat')
+  assert.equal(R.validFilter(s, 'done'), 'done')
+})
+
+test('source error lines: not ok, a failed snapshot, refused and over-cap counts, stale since when', () => {
+  const asOf = Date.parse('2026-11-03T12:58:00+01:00')
+  assert.equal(R.sourceLine(source('p.mail', { label: 'Mail' })), null)
+  assert.equal(R.sourceLine(source('p.mail', { label: 'Mail', state: 'signedOut', stale: true, asOf })), 'Mail: signed out, showing items from 12:58')
+  assert.equal(R.sourceLine(source('p.mail', { label: 'Mail', state: 'error', message: 'quota exceeded' })), 'Mail: quota exceeded')
+  assert.equal(R.sourceLine(source('p.jira', { label: 'Jira', error: 'Jira: did not answer in 10 s', stale: true, asOf })), 'Jira: did not answer in 10 s, showing items from 12:58')
+  assert.equal(R.sourceLine(source('p.mail', { label: 'Mail', refused: 2 })), 'Mail: some items were left out · 2 items refused')
+  assert.equal(
+    R.sourceLine(source('p.mail', { label: 'Mail', state: 'signedOut', refused: 1, overCap: 40 })),
+    'Mail: signed out · 1 item refused · 40 older items left out (over 1000)'
+  )
+  const s = stateOf({ sources: [source('p.mail', { label: 'Mail', state: 'signedOut' }), source('p.chat', { label: 'Chat' }), source('p.jira', { label: 'Jira', overCap: 1 })] })
+  assert.deepEqual(R.sourceLines(s, 'all'), ['Mail: signed out', 'Jira: some items were left out · 1 older item left out (over 1000)'])
+  assert.deepEqual(R.sourceLines(s, 'p.jira'), ['Jira: some items were left out · 1 older item left out (over 1000)'])
+  assert.deepEqual(R.sourceLines(s, 'p.chat'), [])
+})
+
+test('the Done view: newest first as the host sends it, live or gone, Back to Inbox, empty', () => {
+  const done = { count: 2, rows: [
+    { key: 'p.chat\u0000a', source: 'p.chat', id: 'a', title: 'Lunch?', at: NOW - HOUR, live: true, badge: 'CHAT', color: 'green', label: 'Chat' },
+    { key: 'p.mail\u0000b', source: 'p.mail', id: 'b', title: '', at: NOW - 2 * HOUR, live: false, badge: 'MAIL', color: 'violet', label: 'Mail' },
+  ] }
+  const s = stateOf({ done, sources: [source('p.chat'), source('p.mail')] })
+  const m = R.viewModel(s, { filter: 'done' })
+  assert.equal(m.kind, 'done')
+  assert.deepEqual(m.done.map((e) => e.id), ['a', 'b'])
+  assert.deepEqual(R.selectableKeys(m), ['p.chat\u0000a', 'p.mail\u0000b'])
+  assert.deepEqual(R.doneRowModel(done.rows[0]), { key: 'p.chat\u0000a', badge: 'CHAT', color: 'green', source: 'Chat', title: 'Lunch?', meta: 'done 12:42', canOpen: true })
+  assert.deepEqual(R.doneRowModel(done.rows[1]), { key: 'p.mail\u0000b', badge: 'MAIL', color: 'violet', source: 'Mail', title: '(no title)', meta: 'done 11:42 · no longer in the source', canOpen: false })
+  assert.match(R.viewModel(stateOf({ sources: [source('p.chat')] }), { filter: 'done' }).empty, /^Nothing marked done/)
+})
+
+test('search results: grouped as the list, every group open, Done hits marked, the Done chip, no match', () => {
+  const search = {
+    query: 'lunch',
+    count: 3,
+    groups: [{ id: 'chat', name: 'Chat', rows: [row('a'), row('d', { done: true })] }, { id: 'rest', name: 'Rest', rows: [row('m', { src: 'mail' })] }],
+    done: [{ key: 'p.mail\u0000old', source: 'p.mail', id: 'old', title: 'Lunch last week', done: true }],
   }
-  assert.deepEqual(R.chipsModel(state), [
-    { filter: 'all', label: 'All', count: 1 },
-    { filter: 'p.chat', label: 'Chat', count: 1, color: 'green', problem: false },
-    { filter: 'p.jira', label: 'Jira', count: 0, color: 'blue', problem: true },
-    { filter: 'off', label: 'Done & snoozed', count: 2, done: true },
-  ])
-  assert.deepEqual(R.problemLines({ ...state, chips: [{ ...state.chips[1], stale: true, asOf: Date.parse('2026-11-03T12:58:00+01:00') }], calendar: { problem: 'Calendar: slow' } }), [
-    'Jira: signed out (showing the items from 12:58)',
-    'Calendar: slow',
-  ])
+  const s = stateOf({ search, groups: [group('rest', [], { collapsed: true })], sources: [source('p.chat'), source('p.mail')] })
+  const m = R.viewModel(s, { filter: 'all', open: { rest: false } })
+  assert.equal(m.kind, 'search')
+  assert.deepEqual(m.groups.map((g) => [g.id, g.open, g.rows.map((r) => r.id)]), [['chat', true, ['a', 'd']], ['rest', true, ['m']]])
+  assert.deepEqual(m.done.map((e) => e.id), ['old'])
+  assert.deepEqual(R.selectableKeys(m), ['p.chat\u0000a', 'p.chat\u0000d', 'p.mail\u0000m', 'p.mail\u0000old'])
+  assert.deepEqual(R.viewModel(s, { filter: 'p.mail' }).groups.map((g) => g.id), ['rest'])
+  const doneOnly = R.viewModel(s, { filter: 'done' })
+  assert.deepEqual(doneOnly.groups.map((g) => g.rows.map((r) => r.id)), [['d']])
+  assert.deepEqual(doneOnly.done.map((e) => e.id), ['old'])
+  const none = R.viewModel(stateOf({ search: { query: 'zzz', count: 0, groups: [], done: [] }, sources: [source('p.chat')] }), { filter: 'all' })
+  assert.equal(none.empty, 'No match for “zzz”.')
 })
 
-test('rows: triage label, meta, ages, back and related marks; the calendar pin row', () => {
-  const m = R.rowModel(row('c1', { also: 1, back: true }), NOW)
-  assert.equal(m.tri, 'ACT')
-  assert.equal(m.meta, 'Ann Example · DM · +1 related · back: new reply')
-  assert.equal(m.age, '4m')
-  assert.equal(R.ageText(NOW - 30 * 1000, NOW), 'now')
-  assert.equal(R.ageText(NOW - 3 * HOUR, NOW), '3h')
-  assert.equal(R.ageText(NOW - 50 * HOUR, NOW), '2d')
-  assert.equal(R.ageText(null, NOW), '')
-  const cal = R.rowModel({ calendar: true, title: 'Design review starts in 18 min', where: 'Meet', at: NOW + 18 * MIN, meetUrl: 'https://x' }, NOW)
-  assert.deepEqual([cal.age, cal.meta, cal.join, cal.calendar], ['14:00', 'Calendar · Meet', true, true])
+test('empty states: no source, loading, inbox zero, nothing from one source', () => {
+  assert.match(R.viewModel(stateOf(), { filter: 'all' }).empty, /^No source yet/)
+  assert.equal(R.viewModel(stateOf({ sources: [source('p.chat', { loaded: false })] }), { filter: 'all' }).empty, 'loading')
+  assert.equal(R.viewModel(stateOf({ sources: [source('p.chat')] }), { filter: 'all' }).empty, 'Inbox zero: nothing needs you.')
+  const s = stateOf({ groups: [group('now', [row('a')])], sources: [source('p.chat'), source('p.mail', { label: 'Mail' })] })
+  assert.equal(R.viewModel(s, { filter: 'p.mail' }).empty, 'Nothing from Mail.')
+  assert.equal(R.viewModel(s, { filter: 'all' }).empty, null)
 })
 
-test('hostile titles stay plain strings; colours outside the palette become grey', () => {
-  const evil = '<img src=x onerror=alert(1)>'
-  assert.equal(R.rowModel(row('x', { title: evil, from: evil }), NOW).title, evil)
-  assert.equal(R.colorClass('red'), 'c-red')
-  assert.equal(R.colorClass('red; background:url(x)'), 'c-grey')
-  // main.js builds every element with textContent: no markup sinks at all.
-  for (const f of ['main.js', 'settings.js', 'settingslogic.js']) {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'panels', f), 'utf8')
-    assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/)
-  }
-})
-
-test('Done & snoozed rows', () => {
-  assert.deepEqual(R.offModel({ kind: 'done', title: 'A', badge: 'MAIL', at: NOW - HOUR }, NOW), { title: 'A', badge: 'MAIL', when: 'done 12:42', note: 'comes back when it changes' })
-  assert.equal(R.offModel({ kind: 'snooze', title: 'B', at: NOW, until: Date.parse('2026-11-04T09:00:00+01:00') }, NOW).when, 'snoozed until tomorrow 09:00')
-  assert.equal(R.offModel({ kind: 'snooze', title: 'B', at: NOW, until: null }, NOW).when, 'snoozed until it changes')
-  assert.equal(R.dayClock(Date.parse('2026-11-05T09:00:00+01:00'), NOW), 'Thu 09:00')
-})
-
-test('the snooze menu labels follow the settings and the clock', () => {
-  const before = R.snoozeChoices({ afternoon: '14:00', morning: '09:00' }, NOW)
-  assert.deepEqual(before.map((c) => [c.key, c.choice, c.label]), [
-    ['1', '1h', '1 hour'],
-    ['2', 'afternoon', 'This afternoon, 14:00'],
-    ['3', 'tomorrow', 'Tomorrow 9:00'],
-    ['4', 'changes', 'Until it changes'],
-  ])
-  assert.equal(R.snoozeChoices({ afternoon: '13:00', morning: '08:00' }, NOW)[1].label, 'Tomorrow afternoon, 13:00')
-})
-
-test('calendar placement for every position', () => {
-  const s = (position) => ({ calendar: { position } })
-  assert.equal(R.calendarPlacement(s('top'), false), 'top')
-  assert.equal(R.calendarPlacement(s('bottom'), true), 'bottom')
-  assert.equal(R.calendarPlacement(s('beside'), true), 'side')
-  assert.equal(R.calendarPlacement(s('beside'), false), 'top')
-  assert.equal(R.calendarPlacement(s('inline'), true), null)
-  assert.equal(R.calendarPlacement({ calendar: null }, true), null)
-})
-
-test('keys: j/k move, Enter opens, e done, s menu then 1-4, Esc closes, u undo; none on the calendar row', () => {
-  const keys = ['a', 'cal', 'b']
-  const rowOf = (k) => (k === 'cal' ? { calendar: true } : { key: k })
-  const A = (ui, key, mods) => R.keyAction({ menu: null, ...ui }, key, keys, rowOf, mods)
-  assert.deepEqual(A({ sel: 'a' }, 'j'), { type: 'select', key: 'cal' })
-  assert.deepEqual(A({ sel: 'b' }, 'j'), { type: 'select', key: 'b' })
+test('keys: j/k move, Enter opens, e done, s menu then 1-4, Esc, u undo, / search', () => {
+  const keys = ['a', 'gone', 'b', 'nope']
+  const rowOf = (k) => (k === 'gone' ? { done: true, canOpen: false } : k === 'nope' ? { canOpen: false } : { canOpen: true })
+  const A = (ui, key, mods) => R.keyAction({ menu: null, searching: false, ...ui }, key, keys, rowOf, mods)
+  assert.deepEqual(A({ sel: 'a' }, 'j'), { type: 'select', key: 'gone' })
+  assert.deepEqual(A({ sel: 'a' }, 'ArrowDown'), { type: 'select', key: 'gone' })
+  assert.deepEqual(A({ sel: 'nope' }, 'j'), { type: 'select', key: 'nope' })
   assert.deepEqual(A({ sel: 'a' }, 'k'), { type: 'select', key: 'a' })
   assert.deepEqual(A({ sel: null }, 'j'), { type: 'select', key: 'a' })
   assert.deepEqual(A({ sel: 'b' }, 'Enter'), { type: 'open', key: 'b' })
+  assert.equal(A({ sel: 'nope' }, 'Enter'), null, 'an item with no open action does not open')
   assert.deepEqual(A({ sel: 'b' }, 'e'), { type: 'done', key: 'b' })
   assert.deepEqual(A({ sel: 'b' }, 's'), { type: 'menu', key: 'b' })
-  assert.equal(A({ sel: 'cal' }, 'e'), null)
-  assert.equal(A({ sel: 'cal' }, 's'), null)
-  assert.deepEqual(A({ sel: 'cal' }, 'Enter'), { type: 'open', key: 'cal' })
+  assert.equal(A({ sel: 'gone' }, 'e'), null, 'a Done entry is not done again')
+  assert.equal(A({ sel: 'gone' }, 's'), null)
   assert.deepEqual(A({ sel: 'b', menu: 'b' }, '3'), { type: 'snooze', key: 'b', choice: 'tomorrow' })
+  assert.deepEqual(A({ sel: 'b', menu: 'b' }, '1'), { type: 'snooze', key: 'b', choice: '1h' })
   assert.deepEqual(A({ sel: 'b', menu: 'b' }, 'Escape'), { type: 'closeMenu' })
   assert.equal(A({ sel: 'b', menu: 'b' }, 'e'), null)
   assert.deepEqual(A({ sel: 'b' }, 'u'), { type: 'undo' })
+  assert.deepEqual(A({ sel: 'b' }, '/'), { type: 'search' })
+  assert.deepEqual(A({ sel: 'b', searching: true }, 'Escape'), { type: 'leaveSearch' })
+  assert.equal(A({ sel: 'b' }, 'Escape'), null)
   assert.equal(A({ sel: 'b' }, 'e', { ctrl: true }), null)
+  assert.equal(A({ sel: 'b' }, '/', { meta: true }), null)
   assert.equal(R.keyAction({ sel: null, menu: null }, 'j', [], rowOf), null)
   // After a row leaves, the one now at its place.
   assert.equal(R.nextSelection(['a', 'b', 'c'], 'b', ['a', 'c']), 'c')
@@ -124,51 +214,57 @@ test('keys: j/k move, Enter opens, e done, s menu then 1-4, Esc closes, u undo; 
   assert.equal(R.nextSelection(['a'], 'a', []), null)
 })
 
-test('the strip: half-hour cells, the 08-19 span widened by an early event, the now marker, the scale', () => {
-  const at = (h, m = 0) => Date.parse(`2026-11-03T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+01:00`)
-  const events = [
-    { id: 'a', start: at(9, 30), end: at(10), response: 'accepted' },
-    { id: 'b', start: at(16, 30), end: at(17), response: 'needsAction' },
-    { id: 'c', start: at(12), end: at(13), response: 'declined' },
-    { id: 'd', start: at(0), end: at(23, 59), allDay: true },
-  ]
-  const timed = T.timedOf(events, NOW)
-  assert.equal(timed.length, 3)
-  const { lo, hi } = T.dayRange(timed, 'auto')
-  assert.deepEqual([lo, hi], [480, 1140])
-  const cells = T.stripCells(timed, lo, hi)
-  assert.equal(cells.length, 22)
-  assert.equal(cells[3], 'busy') // 09:30
-  assert.equal(cells[17], 'unanswered') // 16:30
-  assert.equal(cells[8], 'free') // 12:00, declined
-  assert.deepEqual(T.dayRange(T.timedOf([{ id: 'e', start: at(7, 15), end: at(7, 45) }], NOW), 'auto'), { lo: 420, hi: 1140 })
-  assert.deepEqual(T.dayRange(T.timedOf([{ id: 'e', start: at(7, 15), end: at(7, 45) }], NOW), 'work'), { lo: 480, hi: 1140 })
-  assert.equal(Math.round(T.nowPct(NOW, 480, 1140)), Math.round(((13 * 60 + 42 - 480) / 660) * 100))
-  assert.equal(T.nowPct(at(20), 480, 1140), null)
-  assert.deepEqual(T.stripScale(480, 1140).map((s) => s.text), ['08:00', '12:00', '16:00', '19:00'])
+test('the snooze menu: v1 choices, the afternoon one says tomorrow once passed', () => {
+  assert.deepEqual(R.snoozeChoices(NOW).map((c) => [c.key, c.choice, c.label]), [
+    ['1', '1h', '1 hour'],
+    ['2', 'afternoon', 'This afternoon, 14:00'],
+    ['3', 'tomorrow', 'Tomorrow 9:00'],
+    ['4', 'changes', 'Until it changes'],
+  ])
+  assert.equal(R.snoozeChoices(Date.parse('2026-11-03T15:00:00+01:00'))[1].label, 'Tomorrow afternoon, 14:00')
 })
 
-test('the block: next card with Join, upcoming without the next one, Accept on the unanswered', () => {
-  const at = (iso) => Date.parse(iso)
-  const review = { id: 'e3', title: 'Design review', start: at('2026-11-03T14:00:00+01:00'), end: at('2026-11-03T14:30:00+01:00'), allDay: false, response: 'accepted', meetUrl: 'https://meet.example.com/x' }
-  const plan = { id: 'e5', title: 'Sprint planning', start: at('2026-11-03T16:30:00+01:00'), end: at('2026-11-03T17:30:00+01:00'), allDay: false, response: 'needsAction' }
-  const later = { id: 'e9', title: 'Roadmap', start: at('2026-11-04T10:00:00+01:00'), end: at('2026-11-04T11:00:00+01:00'), allDay: false, response: 'accepted' }
-  const cal = { position: 'top', timeline: 'auto', upcomingCount: 3, day: { events: [review, plan], tomorrow: { count: 1, first: later } }, upcoming: [review, plan, later] }
-  const m = T.calendarModel(cal, NOW)
-  assert.equal(m.title, 'Today · Tue 3 Nov')
-  assert.equal(m.more, '2 events · tomorrow first 10:00')
-  assert.deepEqual(m.next, { id: 'e3', when: 'in 18 min', what: '14:00 Design review', join: true })
-  assert.deepEqual(m.upcoming, [
-    { id: 'e5', when: '16:30', title: 'Sprint planning', unanswered: true },
-    { id: 'e9', when: 'Wed 10:00', title: 'Roadmap', unanswered: false },
-  ])
-  assert.equal(T.countdown(review, at('2026-11-03T14:10:00+01:00')), 'now · 20 min left')
-  assert.equal(T.countdown(plan, NOW), 'in 2 h 48 min')
-  // An empty day.
-  const empty = T.calendarModel({ position: 'top', upcomingCount: 3, day: { events: [], tomorrow: { count: 0 } }, upcoming: [] }, NOW)
-  assert.equal(empty.more, '0 events · tomorrow nothing')
-  assert.equal(empty.next, null)
-  assert.equal(empty.cells.every((c) => c === 'free'), true)
+test('ages and clocks', () => {
+  assert.equal(R.ageText(NOW - 30 * 1000, NOW), 'now')
+  assert.equal(R.ageText(NOW - 3 * HOUR, NOW), '3h')
+  assert.equal(R.ageText(NOW - 50 * HOUR, NOW), '2d')
+  assert.equal(R.ageText(null, NOW), '')
+  assert.equal(R.clockText(NOW), '13:42')
+})
+
+test('hostile text stays plain strings; colours outside the palette become grey; no markup sink in the page', () => {
+  const evil = '<img src=x onerror=alert(1)>'
+  const m = R.rowModel(row('x', { title: evil, from: { name: evil }, preview: evil, labels: [evil], reason: evil, actions: [{ id: 'x', label: evil }], badge: evil }), NOW)
+  assert.equal(m.title, evil)
+  assert.ok(m.meta.startsWith(evil))
+  assert.equal(m.preview, evil)
+  assert.deepEqual(m.labels, [evil])
+  assert.equal(m.actions[0].label, evil)
+  assert.equal(R.colorName('red'), 'red')
+  assert.equal(R.colorName('red; background:url(x)'), 'grey')
+  assert.equal(R.colorName(undefined), 'grey')
+  // Odd shapes from an older or broken host do not throw.
+  assert.doesNotThrow(() => R.viewModel({ groups: 'x', sources: null, done: null }, { filter: 'all' }))
+  assert.doesNotThrow(() => R.rowModel({ labels: 'x', actions: [null, 3, { id: 1 }], from: 'x', place: 7 }, NOW))
+  // main.js builds every element with textContent: no markup sinks at all.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'panels', 'main.js'), 'utf8')
+  assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/)
+  // Only the panel's own two scripts after the SDK; the v1 pieces are gone.
+  const html = fs.readFileSync(path.join(__dirname, '..', 'panels', 'main.html'), 'utf8')
+  assert.deepEqual([...html.matchAll(/<script src="([^"]+)"/g)].map((x) => x[1]), ['/__sdk/panel.js', 'rowlogic.js', 'main.js'])
+  for (const gone of ['timeline.js', 'settings.js', 'settingslogic.js']) assert.equal(fs.existsSync(path.join(__dirname, '..', 'panels', gone)), false)
+})
+
+test('the components: the page uses the stylesheet classes and draws no control of its own where one fits', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'panels', 'main.js'), 'utf8')
+  for (const cls of ['cc-row', 'cc-row-main', 'cc-row-title', 'cc-row-meta', 'cc-row-actions', 'cc-group', 'cc-group-title', 'cc-count', 'cc-chip', 'cc-badge', 'cc-error-line', 'cc-empty', 'cc-list', 'cc-spinner', 'cc-kbd']) {
+    assert.ok(js.includes(cls), `${cls} used`)
+  }
+  assert.match(js, /el\('details', \{ class: 'cc-group'/)
+  const html = fs.readFileSync(path.join(__dirname, '..', 'panels', 'main.html'), 'utf8')
+  // No hard-coded colours: the theme tokens only.
+  assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ''), /#[0-9a-fA-F]{3,8}\b|rgba?\(/)
+  assert.doesNotMatch(html, /!important/)
 })
 
 test('redraws wait while a mouse button is down, then run once after the click', () => {
@@ -189,23 +285,4 @@ test('redraws wait while a mouse button is down, then run once after the click',
   g.up()
   later.shift()()
   assert.equal(draws, 2, 'a press with no request draws nothing')
-})
-
-test('a click on the chip that is on goes back to All', () => {
-  assert.equal(R.chipFilter('all', 'off'), 'off')
-  assert.equal(R.chipFilter('off', 'off'), 'all')
-  assert.equal(R.chipFilter('p.chat', 'p.chat'), 'all')
-  assert.equal(R.chipFilter('off', 'p.chat'), 'p.chat')
-  assert.equal(R.chipFilter('all', 'all'), 'all')
-})
-
-test('the Read chip shows when a source offers read messages; read rows only open', () => {
-  const base = { rows: [], chips: [], today: [] }
-  assert.equal(R.chipsModel({ ...base, read: null }).some((c) => c.filter === 'read'), false)
-  assert.deepEqual(R.chipsModel({ ...base, read: [{}, {}] }).find((c) => c.filter === 'read'), { filter: 'read', label: 'Read', count: 2, read: true })
-  const rowOf = () => ({ read: true })
-  assert.equal(R.keyAction({ sel: 'x', menu: null }, 'e', ['x'], rowOf), null)
-  assert.equal(R.keyAction({ sel: 'x', menu: null }, 's', ['x'], rowOf), null)
-  assert.deepEqual(R.keyAction({ sel: 'x', menu: null }, 'Enter', ['x'], rowOf), { type: 'open', key: 'x' })
-  assert.equal(R.chipFilter('read', 'read'), 'all')
 })

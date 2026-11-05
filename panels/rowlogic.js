@@ -2,15 +2,21 @@
 // The Inbox panel's decisions, free of the DOM so node:test can check them (test/panel.test.js
 // requires this file; the page loads it as a classic script before main.js, where these become
 // globals). main.js only turns these models into elements, every provider string through
-// textContent. (As bronos.calendar's rowlogic.js.)
+// textContent. The input is the host's `{ type: 'state', version: 2 }` message (dist/host.js
+// `snapshot`): groups of rows already placed by the rules, the source lines, the Done view, the
+// search results (the host searches; the page only sends the query), the undo.
+//
+// A view filter (the chips) is the page's own: `all`, a source's plugin id, or `done`. It narrows
+// what is drawn and never changes a placement.
 
-const FYI_LIMIT = 9 // rows shown before "Show all" (design "Ranking")
 const COLORS = ['green', 'red', 'blue', 'amber', 'violet', 'grey']
-const TRI = { urgent: 'URGENT', action: 'ACT', fyi: 'FYI' }
+const LABELS_SHOWN = 3
+// v1's snooze times: the host fixes them (v2's settings hold groups, rules and the agenda only).
+const SNOOZE_TIMES = { afternoon: '14:00', morning: '09:00' }
 
-/** A palette name as a class (`c-green`); anything else is grey (the host checked it already). */
-function colorClass(c) {
-  return `c-${COLORS.includes(c) ? c : 'grey'}`
+/** A palette name for a `.cc-badge` class; anything else is grey (the host checked it already). */
+function colorName(c) {
+  return COLORS.includes(c) ? c : 'grey'
 }
 
 /** "now", "4m", "2h", "3d" since `at`; "" without a time. */
@@ -29,118 +35,209 @@ function clockText(ms) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/** The rows a filter shows: all (with the calendar pin), or one source's. */
-function filterRows(rows, filter) {
-  if (!Array.isArray(rows)) return []
-  return filter === 'all' || !filter ? rows : rows.filter((r) => r.pluginId === filter)
+const str = (v) => (typeof v === 'string' ? v : '')
+const arr = (v) => (Array.isArray(v) ? v : [])
+const count = (v) => (Number.isFinite(v) && v > 0 ? v : 0)
+
+/** The first line of a preview (the host cut it to 200; sources already made it one line). */
+function firstLine(s) {
+  return str(s).split(/\r?\n/, 1)[0].trim()
+}
+
+/** `Ann Example`, else the address; '' when the item has no sender. */
+function fromText(from) {
+  if (!from || typeof from !== 'object') return ''
+  return str(from.name) || str(from.address)
+}
+
+/** `PROJ · In review`, `general`, ''. */
+function placeText(place) {
+  if (!place || typeof place !== 'object') return ''
+  const name = str(place.name)
+  const status = str(place.status)
+  return name && status ? `${name} · ${status}` : name || status
 }
 
 /**
- * The list as drawn: `{ items: [{ row, divider }], rest }`. The first 9 unless `showAll`; the FYI
- * divider above the first fyi item shown; `rest` is how many "Show all" would add.
+ * What one row draws: the source badge, the title, the meta line (from · place · time), the
+ * preview's first line, at most 3 labels, the rule's reason and the marks (back, done, snoozed in a
+ * search). `actions` are the source's (the host left `open` out: it is the row click), then Done and
+ * Snooze, which are Inbox's own (`own: true`); a done or snoozed search hit has neither.
  */
-function listModel(rows, filter, showAll, limit = FYI_LIMIT) {
-  const all = filterRows(rows, filter)
-  const shown = showAll ? all : all.slice(0, limit)
-  const fyiAt = shown.findIndex((r) => r.level === 'fyi')
-  return { items: shown.map((row, i) => ({ row, divider: i === fyiAt })), rest: all.length - shown.length, total: all.length }
+function rowModel(r, now) {
+  const marks = []
+  if (r.back) marks.push('back: new activity')
+  if (r.done) marks.push('done')
+  if (r.snoozed) marks.push('snoozed')
+  const own = r.done || r.snoozed ? [] : [{ id: 'done', label: 'Done', own: true }, { id: 'snooze', label: 'Snooze', own: true }]
+  const sourceActions = arr(r.actions)
+    .filter((a) => a && typeof a.id === 'string' && a.id !== 'open')
+    .map((a) => ({ id: a.id, label: str(a.label) || a.id, own: false }))
+  return {
+    key: r.key,
+    badge: str(r.badge) || 'FEED',
+    color: colorName(r.color),
+    source: str(r.label) || str(r.source),
+    title: str(r.title),
+    meta: [fromText(r.from), placeText(r.place), ageText(r.time, now)].filter(Boolean).join(' · '),
+    preview: firstLine(r.preview),
+    labels: arr(r.labels).filter((l) => typeof l === 'string' && l).slice(0, LABELS_SHOWN),
+    reason: str(r.reason),
+    marks,
+    unread: r.read === false,
+    canOpen: r.canOpen === true,
+    actions: [...sourceActions, ...own],
+  }
 }
 
-/** The chips: All, one per source (its count, its colour, a mark when it has a problem), Done & snoozed. */
-function chipsModel(state) {
-  const chips = (state && state.chips) || []
-  const rows = (state && state.rows) || []
+/** A Done view row (or a Done search hit no source still has): done when, still in the source or not. */
+function doneRowModel(e) {
+  const when = typeof e.at === 'number' ? `done ${clockText(e.at)}` : 'done'
+  return {
+    key: e.key,
+    badge: str(e.badge) || 'FEED',
+    color: colorName(e.color),
+    source: str(e.label) || str(e.source),
+    title: str(e.title) || '(no title)',
+    meta: [when, e.live ? '' : 'no longer in the source'].filter(Boolean).join(' · '),
+    canOpen: e.live === true,
+  }
+}
+
+/**
+ * One source's `.cc-error-line`, or null when it has nothing to say: not ok (signed out, an error),
+ * a failed snapshot, refused items, items over the 1000 cap. A stale list says since when it is shown.
+ */
+function sourceLine(s) {
+  const label = str(s.label) || str(s.pluginId)
+  const parts = []
+  if (s.state && s.state !== 'ok') parts.push(str(s.message) || (s.state === 'signedOut' ? 'signed out' : 'not available'))
+  // The error already names the source (lib/sources.js): the label is not said twice.
+  const err = str(s.error)
+  if (err) parts.push(err.startsWith(`${label}: `) ? err.slice(label.length + 2) : err)
+  if (!parts.length && !count(s.refused) && !count(s.overCap)) return null
+  let text = `${label}: ${parts.join('; ') || 'some items were left out'}`
+  if (s.stale && typeof s.asOf === 'number') text += `, showing items from ${clockText(s.asOf)}`
+  const counts = []
+  if (count(s.refused)) counts.push(`${count(s.refused)} ${count(s.refused) === 1 ? 'item' : 'items'} refused`)
+  if (count(s.overCap)) counts.push(`${count(s.overCap)} older ${count(s.overCap) === 1 ? 'item' : 'items'} left out (over 1000)`)
+  if (counts.length) text += ` · ${counts.join(' · ')}`
+  return text
+}
+
+/** The lines above the groups, one per source with something to say (with a source filter, its own only). */
+function sourceLines(state, filter) {
+  return arr(state && state.sources)
+    .filter((s) => filter === 'all' || filter === 'done' || s.pluginId === filter)
+    .map(sourceLine)
+    .filter((l) => l !== null)
+}
+
+/** The chips: All, one per source (its shown count, its colour, a mark on a problem), Done. */
+function chipsModel(state, filter) {
+  const sources = arr(state && state.sources)
+  const total = arr(state && state.groups).reduce((n, g) => n + (Number.isFinite(g.count) ? g.count : arr(g.rows).length), 0)
   return [
-    { filter: 'all', label: 'All', count: rows.filter((r) => !r.calendar).length },
-    ...chips.map((c) => ({ filter: c.pluginId, label: c.label, count: c.count, color: c.color, problem: Boolean(c.problem) })),
-    // Read messages, when a source offers them (`state.read` is null when none does).
-    ...(state && Array.isArray(state.read) ? [{ filter: 'read', label: 'Read', count: state.read.length, read: true }] : []),
-    { filter: 'off', label: 'Done & snoozed', count: ((state && state.today) || []).length, done: true },
+    { filter: 'all', label: 'All', count: total, on: filter === 'all' },
+    ...sources.map((s) => ({
+      filter: s.pluginId,
+      label: str(s.label) || s.pluginId,
+      count: count(s.shown),
+      color: colorName(s.color),
+      problem: sourceLine(s) !== null,
+      on: filter === s.pluginId,
+    })),
+    { filter: 'done', label: 'Done', count: count(state && state.done && state.done.count), on: filter === 'done' },
   ]
 }
 
-/** The error lines above the list: one per source with a problem, then the calendar's. */
-function problemLines(state) {
-  const out = []
-  for (const c of (state && state.chips) || []) {
-    if (!c.problem) continue
-    out.push(c.stale && c.asOf ? `${c.problem} (showing the items from ${clockText(c.asOf)})` : c.problem)
+/** The filter after a chip click: a click on the chip already on goes back to All. */
+function chipFilter(current, clicked) {
+  return clicked !== 'all' && clicked === current ? 'all' : clicked
+}
+
+/** A filter that names a source no longer there goes back to All. */
+function validFilter(state, filter) {
+  if (filter === 'all' || filter === 'done') return filter
+  return arr(state && state.sources).some((s) => s.pluginId === filter) ? filter : 'all'
+}
+
+/** Is a group open: what the person last did with it on this page, else its setting (Rest collapsed). */
+function groupOpen(g, remembered) {
+  return remembered && Object.prototype.hasOwnProperty.call(remembered, g.id) ? Boolean(remembered[g.id]) : !g.collapsed
+}
+
+/**
+ * What the body shows: `{ kind, groups, done, empty }`.
+ * - `groups`: `{ id, name, count, more, open, rows }`, only those with rows after the filter; `more`
+ *   is how many the host did not send (it sends 200 rows a group).
+ * - `kind: 'search'`: the host's results grouped as the list is (every group open), then the Done
+ *   entries no source still has (`done`); the Done chip keeps the Done hits only.
+ * - `kind: 'done'`: the Done view, newest first.
+ * - `empty`: why nothing is drawn, `'loading'` while a source has not answered yet, or null.
+ */
+function viewModel(state, ui) {
+  const filter = validFilter(state, ui.filter)
+  const bySource = (r) => filter === 'all' || filter === 'done' || r.source === filter
+  const sources = arr(state && state.sources)
+  if (state && state.search) {
+    const q = state.search
+    const groups = arr(q.groups)
+      .map((g) => {
+        const rows = arr(g.rows).filter((r) => bySource(r) && (filter !== 'done' || r.done))
+        return { id: g.id, name: str(g.name), count: rows.length, more: 0, open: true, rows }
+      })
+      .filter((g) => g.rows.length)
+    const done = arr(q.done).filter(bySource)
+    return { kind: 'search', query: str(q.query), groups, done, empty: groups.length || done.length ? null : `No match for “${str(q.query)}”.` }
   }
-  if (state && state.calendar && state.calendar.problem) out.push(state.calendar.problem)
-  return out
-}
-
-/** What the second line of a row says: triage label, from · where, "+1 mail", "back: new reply". */
-function rowModel(r, now) {
-  if (r.calendar) {
-    return { tri: 'ACT', triClass: 'action', title: r.title, meta: r.where ? `Calendar · ${r.where}` : 'Calendar', age: clockText(r.at), calendar: true, join: Boolean(r.meetUrl) }
+  if (filter === 'done') {
+    const done = arr(state && state.done && state.done.rows)
+    return { kind: 'done', groups: [], done, empty: done.length ? null : 'Nothing marked done. Done hides an item until something new happens in it.' }
   }
-  const meta = [r.from, r.where].filter(Boolean).join(' · ')
-  const extra = []
-  if (r.also) extra.push(`+${r.also} related`)
-  if (r.back) extra.push('back: new reply')
-  return {
-    tri: TRI[r.level] || '',
-    triClass: r.level,
-    title: r.title,
-    meta: extra.length ? `${meta}${meta ? ' · ' : ''}${extra.join(' · ')}` : meta,
-    age: ageText(r.at, now),
-    unread: Boolean(r.unread),
-    back: Boolean(r.back),
-    why: r.why || '',
+  const groups = arr(state && state.groups)
+    .map((g) => {
+      const rows = arr(g.rows).filter(bySource)
+      const n = filter === 'all' && Number.isFinite(g.count) ? g.count : rows.length
+      return { id: g.id, name: str(g.name), count: n, more: Math.max(0, n - rows.length), open: groupOpen(g, ui.open), rows }
+    })
+    .filter((g) => g.count > 0)
+  let empty = null
+  if (!groups.length) {
+    if (!sources.length) empty = 'No source yet: install or enable a plugin that offers an inbox feed (Chat, Gmail, Jira).'
+    else if (sources.some((s) => !s.loaded)) empty = 'loading'
+    else if (filter !== 'all') empty = `Nothing from ${str((sources.find((s) => s.pluginId === filter) || {}).label) || filter}.`
+    else empty = 'Inbox zero: nothing needs you.'
   }
+  return { kind: 'groups', groups, done: [], empty }
 }
 
-/** A Done & snoozed row: its age line and what happens next. */
-function offModel(e, now) {
-  if (e.kind === 'done') return { title: e.title, badge: e.badge, when: `done ${clockText(e.at)}`, note: 'comes back when it changes' }
-  const until = e.until === null || e.until === undefined ? 'until it changes' : `until ${dayClock(e.until, now)}`
-  return { title: e.title, badge: e.badge, when: `snoozed ${until}`, note: e.until ? 'comes back at the top when the time is up' : 'comes back when it changes' }
+/** The row keys the keyboard moves over, in drawn order: rows of open groups, then the Done rows. */
+function selectableKeys(model) {
+  const keys = []
+  for (const g of model.groups) if (g.open) for (const r of g.rows) keys.push(r.key)
+  for (const e of model.done) keys.push(e.key)
+  return keys
 }
 
-/** `14:00` today, `tomorrow 9:00`, `Thu 9:00` later. */
-function dayClock(ms, now) {
-  const d = new Date(ms)
-  const n = new Date(now)
-  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-  const t = clockText(ms)
-  if (sameDay(d, n)) return t
-  const tm = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1)
-  if (sameDay(d, tm)) return `tomorrow ${t}`
-  return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${t}`
-}
-
-/** The snooze menu: the four choices with their labels (the afternoon one says "tomorrow" once it passed). */
-function snoozeChoices(settings, now) {
-  const aft = (settings && settings.afternoon) || '14:00'
-  const morn = (settings && settings.morning) || '09:00'
-  const [h, m] = aft.split(':').map(Number)
+/** The snooze menu: the four choices (the afternoon one says "tomorrow" once it passed). */
+function snoozeChoices(now, times = SNOOZE_TIMES) {
+  const [h, m] = times.afternoon.split(':').map(Number)
   const d = new Date(now)
   const passed = d.getHours() * 60 + d.getMinutes() >= h * 60 + m
   return [
     { choice: '1h', label: '1 hour', key: '1' },
-    { choice: 'afternoon', label: passed ? `Tomorrow afternoon, ${aft}` : `This afternoon, ${aft}`, key: '2' },
-    { choice: 'tomorrow', label: `Tomorrow ${morn.replace(/^0/, '')}`, key: '3' },
+    { choice: 'afternoon', label: passed ? `Tomorrow afternoon, ${times.afternoon}` : `This afternoon, ${times.afternoon}`, key: '2' },
+    { choice: 'tomorrow', label: `Tomorrow ${times.morning.replace(/^0/, '')}`, key: '3' },
     { choice: 'changes', label: 'Until it changes', key: '4' },
   ]
 }
 
 /**
- * Where the calendar block goes: 'top', 'bottom', 'side' (only when the panel is wide; else top),
- * or null (off, in the list: the pin row is the calendar then, or no calendar at all).
- */
-function calendarPlacement(state, wide) {
-  const c = state && state.calendar
-  if (!c) return null
-  if (c.position === 'top' || c.position === 'bottom') return c.position
-  if (c.position === 'beside') return wide ? 'side' : 'top'
-  return null
-}
-
-/**
- * A key press in the list: `ui` is `{ sel, menu }`, `keys` the selectable row keys in order,
- * `rows` by key (to know a calendar row). Returns an action or null:
- * `{ type: 'select', key }`, `open`, `done`, `menu`, `snooze` (with `choice`), `closeMenu`, `undo`.
+ * A key press outside a field: `ui` is `{ sel, menu, searching }`, `keys` the selectable keys in
+ * order, `rowOf(key)` the row as drawn (`done` / `snoozed` on a Done entry or such a search hit,
+ * `canOpen`). Returns null or `{ type }`: `select` (with `key`), `open`, `done`, `menu`, `snooze`
+ * (with `choice`), `closeMenu`, `undo`, `search` (focus the field), `leaveSearch`.
  */
 function keyAction(ui, key, keys, rowOf, mods) {
   if (mods && (mods.alt || mods.ctrl || mods.meta)) return null
@@ -153,6 +250,8 @@ function keyAction(ui, key, keys, rowOf, mods) {
   const at = keys.indexOf(ui.sel)
   const sel = at >= 0 ? ui.sel : null
   const row = sel ? rowOf(sel) : null
+  // Done and snooze are for an item in the list: not for a Done entry or a done or snoozed search hit.
+  const inList = Boolean(row && !row.done && !row.snoozed)
   switch (key) {
     case 'j':
     case 'ArrowDown':
@@ -161,14 +260,17 @@ function keyAction(ui, key, keys, rowOf, mods) {
     case 'ArrowUp':
       return keys.length ? { type: 'select', key: keys[Math.max(0, at - 1)] } : null
     case 'Enter':
-      return sel ? { type: 'open', key: sel } : null
-    // A calendar row and a read row only open: neither can be done or snoozed.
+      return row && row.canOpen ? { type: 'open', key: sel } : null
     case 'e':
-      return sel && row && !row.calendar && !row.read ? { type: 'done', key: sel } : null
+      return inList ? { type: 'done', key: sel } : null
     case 's':
-      return sel && row && !row.calendar && !row.read ? { type: 'menu', key: sel } : null
+      return inList ? { type: 'menu', key: sel } : null
     case 'u':
       return { type: 'undo' }
+    case '/':
+      return { type: 'search' }
+    case 'Escape':
+      return ui.searching ? { type: 'leaveSearch' } : null
     default:
       return null
   }
@@ -180,11 +282,6 @@ function nextSelection(keysBefore, gone, keysAfter) {
   if (!keysAfter.length) return null
   if (keysAfter.includes(gone)) return gone
   return keysAfter[Math.min(Math.max(0, at), keysAfter.length - 1)]
-}
-
-/** The filter after a chip click: a click on the chip already on goes back to All. */
-function chipFilter(current, clicked) {
-  return clicked !== 'all' && clicked === current ? 'all' : clicked
 }
 
 /**
@@ -219,5 +316,28 @@ function createRenderGate(draw, defer = (fn) => setTimeout(fn, 0)) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FYI_LIMIT, colorClass, ageText, clockText, filterRows, listModel, chipsModel, problemLines, rowModel, offModel, dayClock, snoozeChoices, calendarPlacement, keyAction, nextSelection, chipFilter, createRenderGate }
+  module.exports = {
+    COLORS,
+    SNOOZE_TIMES,
+    colorName,
+    ageText,
+    clockText,
+    firstLine,
+    fromText,
+    placeText,
+    rowModel,
+    doneRowModel,
+    sourceLine,
+    sourceLines,
+    chipsModel,
+    chipFilter,
+    validFilter,
+    groupOpen,
+    viewModel,
+    selectableKeys,
+    snoozeChoices,
+    keyAction,
+    nextSelection,
+    createRenderGate,
+  }
 }

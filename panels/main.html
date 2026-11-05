@@ -4,147 +4,65 @@
     <meta charset="utf-8" />
     <title>Inbox</title>
     <!-- The panel CSP allows script from this plugin's own files only (no inline script), so the
-      logic lives in main.js; rowlogic.js and timeline.js hold its pure parts. The SDK gives the page
-      `ccPanel` and the app theme variables. The title bar (updated time, refresh, settings) is the
-      app's, from the host's ctx.panels.header. Source colours are names from a fixed palette, as
-      classes (c-green ...), never CSS from a provider. -->
+      logic lives in main.js; rowlogic.js holds its pure parts. The SDK gives the page `ccPanel`, the
+      app theme variables and the component stylesheet (`ccc guide style`: .cc-toolbar, .cc-chip,
+      .cc-group, .cc-row, .cc-badge, .cc-error-line, .cc-empty). The rules below only place those
+      components for this panel (unlayered, so they win over the layer) and draw what has no
+      component: the source dot, the row's action strip over its right end, the snooze menu, the undo
+      toast. Colours only from the theme tokens; a source colour is a palette name used as a class. -->
     <script src="/__sdk/panel.js"></script>
     <script src="rowlogic.js" defer></script>
-    <script src="timeline.js" defer></script>
-    <script src="settingslogic.js" defer></script>
-    <script src="settings.js" defer></script>
     <script src="main.js" defer></script>
     <style>
-      body { margin: 0; font: 12.5px/1.4 system-ui, sans-serif; background: var(--cc-bg); color: var(--cc-fg); }
-      button { font: inherit; color: inherit; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
-      button:hover { border-color: var(--cc-border-strong); }
-      button:focus-visible, .row:focus-visible { outline: 2px solid var(--cc-focus); outline-offset: -2px; }
-      button.primary { background: var(--cc-accent); color: var(--cc-accent-fg); border-color: var(--cc-accent); font-weight: 600; }
-      button.primary:hover { background: var(--cc-accent-hover); }
-      /* The settings view: sections as cards of rows, the label left, the control right, one height. */
-      .set { padding: 6px 12px 0; }
-      .set .back { border: 0; background: none; color: var(--cc-accent); padding: 4px 0; }
-      .set h3 { margin: 16px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--cc-fg-muted); }
-      .set .hint { color: var(--cc-fg-subtle); font-size: 11.5px; line-height: 1.45; margin: -2px 0 8px; }
-      .set .card { border: 1px solid var(--cc-border); border-radius: 6px; background: var(--cc-surface-1); }
-      .set .field { display: flex; align-items: center; gap: 12px; min-height: 34px; padding: 5px 10px; }
-      .set .field + .field { border-top: 1px solid var(--cc-border); }
-      .set .field .lbl { flex: 1; min-width: 0; }
-      .set .field .lbl small { display: block; color: var(--cc-fg-subtle); font-size: 11px; line-height: 1.35; margin-top: 1px; }
-      .set .field .ctl { flex: none; display: flex; justify-content: flex-end; }
-      .set input[type=text], .set select { box-sizing: border-box; height: 24px; font: inherit; color: inherit; background: var(--cc-bg); border: 1px solid var(--cc-border); border-radius: 4px; padding: 0 6px; }
-      .set input[type=text] { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
-      .set input[type=text]::placeholder { color: var(--cc-fg-subtle); }
-      .set select { width: 176px; }
-      .set input[type=text]:focus, .set select:focus { outline: 2px solid var(--cc-focus); outline-offset: -1px; }
-      /* Toggle switch: a checkbox drawn as a track and a knob. */
-      .set input.toggle { appearance: none; -webkit-appearance: none; margin: 0; width: 30px; height: 17px; border-radius: 9px; background: var(--cc-surface-3); position: relative; cursor: pointer; transition: background .15s; flex: none; }
-      .set input.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--cc-fg-muted); transition: transform .15s, background .15s; }
-      .set input.toggle:checked { background: var(--cc-accent); }
-      .set input.toggle:checked::after { transform: translateX(13px); background: var(--cc-accent-fg, #fff); }
-      .set input.toggle:focus-visible { outline: 2px solid var(--cc-focus); outline-offset: 2px; }
-      .set input.toggle:disabled { opacity: .5; cursor: default; }
-      /* The sources grid: name | items | weight | on, the header on the same columns. */
-      .set .srcgrid .field { display: grid; grid-template-columns: 1fr 64px 64px 30px; gap: 12px; }
-      .set .srcgrid .head { min-height: 26px; color: var(--cc-fg-subtle); font-size: 11px; }
-      .set .srcgrid .head span:not(:first-child) { text-align: right; }
-      .set .srcgrid .field > :not(:first-child) { justify-self: end; }
-      .set .srcgrid .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .set .srcgrid .name b { color: var(--src); font-weight: 600; }
-      .set .srcgrid .gone { opacity: .5; }
-      .set .actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px; margin: 18px -12px 0; padding: 10px 12px; background: var(--cc-bg); border-top: 1px solid var(--cc-border); }
-      .set .actions button { min-width: 72px; height: 26px; }
-      .muted { color: var(--cc-fg-muted); }
+      body { margin: 0; }
+      /* Unlayered, so it beats the layer's `display: flex` on the toolbar. */
+      [hidden] { display: none; }
 
-      /* The palette (feed.js COLORS): a source's dot and badge. */
-      .c-green { --src: #3ecf8e; } .c-red { --src: #f2777a; } .c-blue { --src: #5c9cf5; }
-      .c-amber { --src: #e5b567; } .c-violet { --src: #b48ef0; } .c-grey { --src: #8b93a3; }
+      .cc-toolbar { position: sticky; top: 0; z-index: 3; background: var(--cc-bg); }
+      .chips { display: flex; flex-wrap: wrap; gap: var(--cc-space-1); }
+      .cc-chip .cc-count { font-weight: 400; }
+      .cc-chip .problem { color: var(--cc-status-ended); font-weight: 600; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cc-project-grey); }
+      .dot.green { background: var(--cc-project-green); } .dot.red { background: var(--cc-project-red); }
+      .dot.blue { background: var(--cc-project-blue); } .dot.amber { background: var(--cc-project-orange); }
+      .dot.violet { background: var(--cc-project-purple); } .dot.grey { background: var(--cc-project-grey); }
 
-      .notice { margin: 8px 10px; padding: 6px 8px; border-radius: 5px; background: var(--cc-bg-banner); border: 1px solid var(--cc-border); white-space: pre-wrap; overflow-wrap: anywhere; }
-      .notice.error { background: var(--cc-bg-error); }
+      #notice, #lines { display: flex; flex-direction: column; gap: var(--cc-space-1); padding: 0 var(--cc-space-2); }
+      #notice:not(:empty) { padding-top: var(--cc-space-2); }
+      #lines:not(:empty) { padding-top: var(--cc-space-2); }
+      .cc-error-line { overflow-wrap: anywhere; }
+      #body { padding: var(--cc-space-2) var(--cc-space-1); }
+      .search-h, .more { padding: var(--cc-space-1) var(--cc-space-3); font-size: var(--cc-text-s); }
 
-      .chips { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--cc-border); flex-wrap: wrap; }
-      .chip { border-radius: 999px; padding: 1px 9px; color: var(--cc-fg-muted); background: none; }
-      .chip.on { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); border-color: transparent; color: var(--cc-fg); }
-      .chip i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--src); }
-      .chip .n { color: var(--cc-fg-subtle); margin-left: 4px; }
-      .chip.problem .n::after { content: " !"; color: var(--cc-status-needs-permission, #e5a00d); }
-      .chip.done, .chip.read { margin-left: auto; }
-      .chip.read ~ .chip.done { margin-left: 0; }
-      .src-err { margin: 6px 10px; padding: 5px 8px; border-radius: 5px; background: color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 12%, transparent); color: var(--cc-fg); font-size: 12px; overflow-wrap: anywhere; }
+      /* A row: the badge on the first line, the text in lines below each other. */
+      .inbox-row { align-items: flex-start; padding-block: 6px; cursor: pointer; }
+      .inbox-row > .cc-badge { flex: none; min-width: 40px; justify-content: center; margin-top: 1px; font-weight: 600; letter-spacing: .03em; }
+      .inbox-row .cc-row-meta .mark { color: var(--cc-accent); }
+      .inbox-row .cc-row-meta .mark::before, .inbox-row .cc-row-meta .reason::before { content: ' · '; color: var(--cc-fg-muted); }
+      .inbox-row .cc-row-meta .reason { color: var(--cc-fg-subtle); }
+      .inbox-row .preview { overflow: hidden; font-size: var(--cc-text-s); text-overflow: ellipsis; white-space: nowrap; }
+      .inbox-row .labels { display: flex; flex-wrap: wrap; gap: var(--cc-space-1); margin-top: 2px; }
+      .inbox-row .labels .cc-chip { height: 18px; cursor: default; }
+      /* The actions over the row's right end (they would take the title's room in the flow), on the
+         component's own hover and focus rule (visibility). */
+      .inbox-row > .cc-row-actions { position: absolute; top: 4px; right: var(--cc-space-2); padding: 2px; border-radius: var(--cc-radius-m); background: var(--cc-surface-2); box-shadow: 0 1px 4px var(--cc-shadow); }
+      .inbox-row > .cc-row-actions button { height: 22px; padding: 0 var(--cc-space-2); font-size: var(--cc-text-s); }
 
-      .cal { padding: 8px 10px; border-bottom: 1px solid var(--cc-border); }
-      .cal.bottom { border-bottom: 0; border-top: 1px solid var(--cc-border); }
-      .cal-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
-      .cal-h .t { font-weight: 600; font-size: 11px; color: var(--cc-fg-muted); text-transform: uppercase; letter-spacing: .05em; }
-      .cal-h .more { margin-left: auto; color: var(--cc-fg-subtle); font-size: 11px; }
-      .stripbox { position: relative; }
-      .strip { display: flex; height: 12px; border-radius: 3px; overflow: hidden; }
-      .strip i { flex: 1; background: var(--cc-surface-3); border-right: 1px solid var(--cc-surface-1); }
-      .strip i:last-child { border-right: 0; }
-      .strip i.b { background: color-mix(in srgb, var(--cc-status-working, #3b8eea) 70%, var(--cc-surface-1)); }
-      .strip i.u { background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 75%, var(--cc-surface-1)) 0 3px, color-mix(in srgb, var(--cc-status-needs-permission, #e5a00d) 25%, var(--cc-surface-1)) 3px 6px); }
-      .stripbox .now { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--cc-status-ended, #cd3131); border-radius: 1px; }
-      .scale { position: relative; height: 12px; font-size: 9.5px; line-height: 12px; color: var(--cc-fg-subtle); font-variant-numeric: tabular-nums; }
-      .scale span { position: absolute; transform: translateX(-50%); }
-      .scale span:first-child { transform: none; }
-      .scale span:last-child { transform: translateX(-100%); }
-      .next { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 5px 8px; background: var(--cc-surface-1); border-radius: 5px; }
-      .next .when { color: #e5b567; font-weight: 600; white-space: nowrap; }
-      .next .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-      .up { list-style: none; margin: 5px 0 0; padding: 0; }
-      .up li { display: flex; gap: 8px; align-items: center; padding: 2px; font-size: 12px; }
-      .up .tm { color: var(--cc-fg-muted); width: 72px; flex: none; font-variant-numeric: tabular-nums; }
-      .up .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-      .up .q { color: var(--cc-status-needs-permission, #e5a00d); font-size: 11px; white-space: nowrap; }
+      .menu { position: absolute; right: var(--cc-space-2); top: calc(100% - 2px); z-index: 5; display: flex; flex-direction: column; min-width: 200px; padding: var(--cc-space-1); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-m); background: var(--cc-bg-menu); box-shadow: 0 8px 24px var(--cc-shadow); }
+      .menu .menu-h { padding: 2px var(--cc-space-2); font-size: var(--cc-text-s); }
+      .menu button { justify-content: space-between; width: 100%; color: var(--cc-fg); }
 
-      .list { list-style: none; margin: 0; padding: 4px 0; }
-      .row { display: flex; gap: 9px; padding: 6px 10px; cursor: pointer; border-left: 2px solid transparent; position: relative; }
-      .row:hover { background: var(--cc-surface-1); }
-      .row.sel { background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-left-color: var(--cc-accent); }
-      .badge { flex: none; width: 40px; text-align: center; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; border-radius: 4px; padding: 2px 0; height: 17px; box-sizing: border-box; margin-top: 1px; color: var(--src); background: color-mix(in srgb, var(--src) 14%, transparent); }
-      .body { flex: 1; min-width: 0; }
-      .l1 { display: flex; gap: 6px; align-items: baseline; }
-      .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .row.unread .title { font-weight: 600; }
-      .age { color: var(--cc-fg-subtle); font-size: 11px; white-space: nowrap; }
-      .l2 { color: var(--cc-fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .row.back .l2 { color: var(--cc-fg); }
-      .tri { font-size: 10.5px; font-weight: 600; margin-right: 6px; }
-      .tri.urgent { color: var(--cc-status-ended, #ff6b6b); } .tri.action { color: #f0a35e; } .tri.fyi { color: var(--cc-fg-subtle); }
-      .why { color: var(--cc-fg-subtle); font-size: 11px; margin-top: 2px; display: none; }
-      .row.sel .why { display: block; }
-      /* The row buttons as in bronos.chat and bronos.gmail: always in the DOM (Tab reaches them), faded
-         out until the row is hovered, selected or has the focus inside; over the right end of the
-         row's second line. */
-      .acts { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 3px; padding: 1px 2px; background: var(--cc-surface-2); border-radius: 4px; box-shadow: 0 1px 3px var(--cc-shadow); opacity: 0; pointer-events: none; transition: opacity 80ms; }
-      .acts:empty { display: none; }
-      .row:hover .acts, .row.sel .acts, .row:focus-within .acts { opacity: 1; pointer-events: auto; }
-      .acts button { font-size: 10px; line-height: 15px; padding: 0 5px; }
-      .sep { margin: 6px 10px; border-top: 1px solid var(--cc-border); position: relative; height: 0; }
-      .sep span { position: absolute; top: -8px; left: 0; background: var(--cc-bg); padding-right: 6px; color: var(--cc-fg-subtle); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
-      .fold { padding: 6px 10px 10px; color: var(--cc-fg-subtle); font-size: 12px; display: flex; justify-content: space-between; }
-      .fold button { background: none; border: 0; color: var(--cc-accent); padding: 0; }
-      .menu { position: absolute; right: 2px; top: calc(100% - 2px); z-index: 5; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; padding: 4px; box-shadow: 0 8px 24px var(--cc-shadow, rgba(0,0,0,.4)); min-width: 200px; }
-      .menu button { display: flex; justify-content: space-between; width: 100%; background: none; border: 0; padding: 5px 8px; border-radius: 5px; text-align: left; }
-      .menu button:hover { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
-      .menu .h { padding: 3px 8px; color: var(--cc-fg-subtle); font-size: 11px; }
-      kbd { font: 10.5px ui-monospace, monospace; color: var(--cc-fg-subtle); }
-      .toast { position: sticky; bottom: 8px; margin: 0 10px 8px; display: flex; gap: 10px; align-items: center; padding: 7px 10px; background: var(--cc-bg-menu); border: 1px solid var(--cc-border); border-radius: 7px; }
+      #toast { position: sticky; bottom: 0; padding: 0 var(--cc-space-2) var(--cc-space-2); }
+      #toast:empty { display: none; }
+      .toast { display: flex; align-items: center; gap: var(--cc-space-3); padding: var(--cc-space-1) var(--cc-space-1) var(--cc-space-1) var(--cc-space-3); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-m); background: var(--cc-bg-menu); box-shadow: 0 4px 12px var(--cc-shadow); }
       .toast .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .toast button { background: none; border: 0; color: var(--cc-accent); font-weight: 600; }
-      .keys { padding: 6px 10px 10px; color: var(--cc-fg-subtle); font-size: 11px; border-top: 1px solid var(--cc-border); }
-      .keys kbd { border: 1px solid var(--cc-border); border-radius: 3px; padding: 0 4px; margin: 0 2px; }
-      .empty { padding: 26px 10px; text-align: center; color: var(--cc-fg-subtle); }
-      button.link { margin-top: 8px; border: 0; background: none; color: var(--cc-accent); padding: 0; }
-
-      .wide-body { display: flex; }
-      .wide-body > .col { flex: 1; min-width: 0; }
-      .wide-body > .side { width: 300px; border-left: 1px solid var(--cc-border); }
-      .wide-body > .side .cal { border-bottom: 0; }
     </style>
   </head>
   <body>
-    <div id="root"><div class="empty">Loading…</div></div>
+    <div class="cc-toolbar" id="toolbar"></div>
+    <div id="notice"></div>
+    <div id="lines"></div>
+    <div id="body"></div>
+    <div id="toast"></div>
   </body>
 </html>

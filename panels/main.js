@@ -1,27 +1,44 @@
 'use strict'
-// The Inbox panel: renders the host's `{ type: 'state' }` message (chips, error lines, the calendar
-// block where its setting puts it, the ranked list, the undo toast) and posts actions back by row
-// key; the host finds the row, the id and any URL itself. Every text from a provider goes in through
-// textContent, never as markup. The models come from rowlogic.js and timeline.js (pure, tested);
-// this file only builds elements and handles input.
+// The Inbox panel v2 (docs/design-v2.md "The panel"): draws the host's `{ type: 'state', version: 2 }`
+// message (dist/host.js `snapshot`) with the app's component stylesheet and posts what the person does
+// back by row key; the host finds the item, its source and its actions itself and never takes an id,
+// a rev or an action list from this page. Every text from a source goes in through textContent, never
+// as markup; a colour is a palette name used as a class. The decisions (rows, groups, chips, source
+// lines, keys) live in rowlogic.js, pure and tested; this file only builds elements and handles input.
 //
-// The page tells the host when it comes into sight or its window gets focus (`visible`), so a done
-// in another window shows here at once. Between state messages a 15 s timer redraws the ages,
-// countdowns and the now marker; a 1 s one hides the toast when its undo time is up.
+// Built once: the toolbar (the search field must keep its caret and text while state messages
+// redraw the rest). Redrawn on every state: the chips, the source lines, the groups or the Done view
+// or the search results, the undo toast. The app draws the title bar (updated time, refresh, the gear
+// to Inbox's settings page) and the agenda slot; this page draws no settings.
+//
+// The page tells the host when it comes into sight or its window gets focus (`visible`), so a Done in
+// another window shows here at once. A 15 s timer redraws the ages; a 1 s one drops the undo toast
+// when its time is up.
 
 let state = null
-const ui = { filter: 'all', sel: null, menu: null, showAll: false, notice: null, view: 'list' }
+const ui = {
+  filter: 'all',
+  sel: null,
+  menu: null,
+  // A group's open state as the person last left it, by group id, for this page's life (a panel page
+  // has an opaque origin: no localStorage). Groups never touched follow their setting.
+  open: {},
+  searching: false,
+  notice: null,
+}
 let noticeTimer = null
+let searchTimer = null
+let model = null
 // Redraws from a state message or a timer wait while a mouse button is down (rowlogic.js
-// createRenderGate: a redraw between press and release loses the click). Redraws a click itself
-// asks for call render() directly.
+// createRenderGate: a redraw between press and release loses the click). Redraws a click itself asks
+// for call render() directly.
 const gate = createRenderGate(() => render())
 document.addEventListener('pointerdown', () => gate.down(), true)
 document.addEventListener('pointerup', () => gate.up(), true)
 document.addEventListener('pointercancel', () => gate.up(), true)
 
-const root = () => document.getElementById('root')
 const post = (type, extra) => ccPanel.post({ type, ...extra })
+const $ = (id) => document.getElementById(id)
 
 function el(tag, props, ...children) {
   const n = document.createElement(tag)
@@ -35,222 +52,237 @@ function el(tag, props, ...children) {
   return n
 }
 
+/** A button whose click does not also reach the row under it. */
 function button(label, onclick, title, cls) {
   return el('button', { type: 'button', title, class: cls, onclick: (ev) => { ev.stopPropagation(); onclick() } }, label)
 }
 
-const wide = () => window.innerWidth >= 700
+// ---- the toolbar (built once) ----
 
-// ---- calendar ----
+const search = el('input', { type: 'search', id: 'q', placeholder: 'Search', 'aria-label': 'Search every item, Rest and Done included (/)', autocomplete: 'off', spellcheck: 'false' })
+const chips = el('div', { class: 'chips', role: 'group', 'aria-label': 'Show' })
 
-function calendarBlock(where) {
-  const m = calendarModel(state.calendar, Date.now())
-  const box = el('div', { class: `cal ${where}` })
-  box.append(el('div', { class: 'cal-h' }, el('span', { class: 't', text: m.title }), el('span', { class: 'more', text: m.more })))
-  const strip = el('div', { class: 'strip', role: 'img', 'aria-label': 'Today in half hours: blue busy, striped not answered, grey free' })
-  m.cells.forEach((c, i) => strip.append(el('i', { class: c === 'busy' ? 'b' : c === 'unanswered' ? 'u' : '', title: m.cellTitles[i] })))
-  const wrap = el('div', { class: 'stripbox' }, strip)
-  if (m.now !== null) wrap.append(el('div', { class: 'now', style: `left:${m.now.toFixed(2)}%` }))
-  const scale = el('div', { class: 'scale' })
-  for (const s of m.scale) scale.append(el('span', { style: `left:${s.pct.toFixed(2)}%`, text: s.text }))
-  box.append(wrap, scale)
-  if (m.next) {
-    box.append(
-      el('div', { class: 'next' },
-        el('span', { class: 'when', text: m.next.when }),
-        el('span', { class: 'what', text: m.next.what, title: 'Open the event', onclick: () => post('calOpen', { eventId: m.next.id }) }),
-        m.next.join ? button('Join', () => post('join', { eventId: m.next.id }), 'Join the meeting', 'primary') : null)
-    )
-  }
-  if (m.upcoming.length) {
-    const ul = el('ul', { class: 'up' })
-    for (const u of m.upcoming) {
-      ul.append(
-        el('li', {},
-          el('span', { class: 'tm', text: u.when }),
-          el('span', { class: 'nm', text: u.title, onclick: () => post('calOpen', { eventId: u.id }) }),
-          u.unanswered ? el('span', { class: 'q', text: '? not answered' }) : null,
-          u.unanswered ? button('Accept', () => post('respond', { eventId: u.id, answer: 'accepted' }), 'Accept the invitation') : null)
-      )
+function sendSearch() {
+  clearTimeout(searchTimer)
+  searchTimer = null
+  post('search', { query: search.value })
+}
+
+search.addEventListener('input', () => {
+  ui.searching = search.value.trim() !== ''
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(sendSearch, 200)
+})
+search.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') {
+    ev.preventDefault()
+    leaveSearch()
+  } else if (ev.key === 'Enter' || ev.key === 'ArrowDown') {
+    // From the field into the results: the first row takes the keyboard.
+    ev.preventDefault()
+    if (searchTimer) sendSearch()
+    const keys = model ? selectableKeys(model) : []
+    if (keys.length) {
+      ui.sel = keys[0]
+      render()
+      focusSel()
     }
-    box.append(ul)
+  }
+})
+
+function leaveSearch() {
+  const had = search.value !== '' || (state && state.search)
+  search.value = ''
+  ui.searching = false
+  if (had) sendSearch()
+  search.blur()
+  focusSel()
+}
+
+// ---- rows ----
+
+function snoozeMenu(key) {
+  const box = el('div', { class: 'menu', role: 'menu', 'aria-label': 'Snooze until' }, el('div', { class: 'menu-h cc-muted', text: 'Snooze until…' }))
+  for (const c of snoozeChoices(Date.now())) {
+    box.append(el('button', { type: 'button', role: 'menuitem', class: 'cc-ghost', onclick: (ev) => { ev.stopPropagation(); snooze(key, c.choice) } }, el('span', { text: c.label }), el('kbd', { class: 'cc-kbd', text: c.key })))
   }
   return box
 }
 
-// ---- the list ----
+function rowShell(key, m, extraClass) {
+  const selected = ui.sel === key
+  return el('li', {
+    class: ['cc-row', 'inbox-row', extraClass].filter(Boolean).join(' '),
+    tabindex: selected ? '0' : '-1',
+    'aria-selected': selected ? 'true' : 'false',
+    'data-key': key,
+  }, el('span', { class: `cc-badge ${m.color}`, text: m.badge, title: m.source }))
+}
 
-function snoozeMenu(key) {
-  const box = el('div', { class: 'menu', role: 'menu' }, el('div', { class: 'h', text: 'Snooze until…' }))
-  for (const c of snoozeChoices(state.settings, Date.now())) {
-    box.append(el('button', { type: 'button', role: 'menuitem', onclick: (ev) => { ev.stopPropagation(); snooze(key, c.choice) } }, el('span', { text: c.label }), el('kbd', { text: c.key })))
-  }
-  return box
+function onRowClick(li, key, canOpen) {
+  li.addEventListener('click', () => {
+    // Selecting text in a row is not a click on it.
+    if (window.getSelection && String(window.getSelection()).length) return
+    ui.sel = key
+    ui.menu = null
+    if (canOpen) post('open', { key })
+    render()
+  })
 }
 
 function rowEl(r) {
   const m = rowModel(r, Date.now())
-  const cls = ['row', m.unread && 'unread', m.back && 'back', ui.sel === r.key && 'sel'].filter(Boolean).join(' ')
-  const li = el('li', { class: cls, tabindex: ui.sel === r.key ? '0' : '-1', 'data-key': r.key })
-  li.append(
-    el('span', { class: `badge ${colorClass(r.color)}`, text: r.badge }),
-    el('div', { class: 'body' },
-      el('div', { class: 'l1' }, el('span', { class: 'title', text: m.title, title: m.title }), el('span', { class: 'age', text: m.age })),
-      el('div', { class: 'l2' }, el('span', { class: `tri ${m.triClass}`, text: m.tri }), m.meta),
-      m.why ? el('div', { class: 'why', text: m.why }) : null)
-  )
-  const acts = el('span', { class: 'acts' })
-  if (r.read) {
-    // Read already: a click opens it again; Mark unread where the source offers it (`markUnread`).
-    if (r.canUnread) acts.append(button('Mark unread', () => post('markUnread', { key: r.key }), `Mark it unread in ${r.label}: it goes back to the list`))
-  } else if (m.calendar) {
-    if (m.join) acts.append(button('Join', () => post('join', { eventId: r.id }), 'Join the meeting', 'primary'))
-  } else {
-    const chip = (state.chips || []).find((c) => c.pluginId === r.pluginId)
-    const reads = state.settings && state.settings.doneMarksRead && (state.providers || []).some((p) => p.pluginId === r.pluginId && p.markRead)
-    acts.append(
-      button('Done', () => done(r.key), `Done (e): hidden until it changes${reads ? `; also marked read in ${chip ? chip.label : 'its source'}` : ''}`),
-      button('Snooze ▾', () => { ui.menu = ui.menu === r.key ? null : r.key; render() }, 'Snooze (s)')
-    )
+  const li = rowShell(m.key, m, m.unread ? 'cc-unread' : '')
+  const meta = el('span', { class: 'cc-row-meta' }, m.meta)
+  for (const mark of m.marks) meta.append(el('span', { class: 'mark', text: mark }))
+  if (m.reason) meta.append(el('span', { class: 'reason', text: m.reason }))
+  const main = el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.title, title: m.title }), meta)
+  if (m.preview) main.append(el('span', { class: 'preview cc-muted', text: m.preview }))
+  if (m.labels.length) {
+    const labels = el('span', { class: 'labels' })
+    for (const l of m.labels) labels.append(el('span', { class: 'cc-chip', text: l }))
+    main.append(labels)
   }
-  li.append(acts)
-  if (ui.menu === r.key) li.append(snoozeMenu(r.key))
-  li.addEventListener('click', () => {
-    if (window.getSelection && String(window.getSelection()).length) return
-    ui.sel = r.key
-    ui.menu = null
-    open(r)
-  })
+  li.append(main)
+  if (m.actions.length) {
+    const acts = el('span', { class: 'cc-row-actions' })
+    for (const a of m.actions) {
+      if (a.own && a.id === 'done') acts.append(button('Done', () => done(m.key), 'Done (e): hidden until something new happens in it'))
+      else if (a.own && a.id === 'snooze') acts.append(button('Snooze', () => { ui.sel = m.key; ui.menu = ui.menu === m.key ? null : m.key; render() }, 'Snooze (s)'))
+      else acts.append(button(a.label, () => post('act', { key: m.key, action: a.id }), `${a.label} in ${m.source}`))
+    }
+    li.append(acts)
+  }
+  if (ui.menu === m.key) li.append(snoozeMenu(m.key))
+  onRowClick(li, m.key, m.canOpen)
   return li
 }
 
-function offList() {
-  const today = state.today || []
-  const back = () => button('← Back to the list', () => { ui.filter = 'all'; render() }, 'Show the inbox again', 'link')
-  if (!today.length) return el('div', { class: 'empty' }, el('div', { text: 'Nothing done or snoozed today.' }), back())
-  const ul = el('ul', { class: 'list' })
-  for (const e of today) {
-    const m = offModel(e, Date.now())
-    const chip = (state.chips || []).find((c) => c.pluginId === e.pluginId)
-    ul.append(
-      el('li', { class: 'row' },
-        el('span', { class: `badge ${colorClass(chip && chip.color)}`, text: m.badge }),
-        el('div', { class: 'body' },
-          el('div', { class: 'l1' }, el('span', { class: 'title', text: m.title }), el('span', { class: 'age', text: m.when })),
-          el('div', { class: 'l2', text: m.note })),
-        el('span', { class: 'acts' }, button('Back to inbox', () => post('restore', { pluginId: e.pluginId, id: e.id }), 'Show it in the list again')))
-    )
-  }
-  return ul
+function doneRowEl(e) {
+  const m = doneRowModel(e)
+  const li = rowShell(m.key, m, 'done-row')
+  li.append(
+    el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.title, title: m.title }), el('span', { class: 'cc-row-meta', text: m.meta })),
+    el('span', { class: 'cc-row-actions' }, button('Back to Inbox', () => post('restore', { key: m.key }), 'Show it in the list again: the rules place it'))
+  )
+  onRowClick(li, m.key, m.canOpen)
+  return li
 }
 
-/** The Read chip: the sources' read messages, newest first; a click opens one as from the list. */
-function readList() {
-  const rows = state.read || []
-  if (!rows.length) {
-    return el('div', { class: 'empty' }, el('div', { text: 'No read messages from the last days.' }), button('← Back to the list', () => { ui.filter = 'all'; render() }, 'Show the inbox again', 'link'))
-  }
-  const ul = el('ul', { class: 'list', role: 'listbox' })
-  for (const r of rows) ul.append(rowEl(r))
-  return ul
+function groupEl(g) {
+  const d = el('details', { class: 'cc-group', open: g.open, 'data-group': g.id },
+    el('summary', { class: 'cc-group-title' }, el('span', { text: g.name }), el('span', { class: 'cc-count', text: String(g.count) })))
+  // Setting `open` while building fires a `toggle` too: only a change from what was drawn is the person's.
+  d.addEventListener('toggle', () => {
+    if (d.open === g.open) return
+    ui.open[g.id] = d.open
+    render()
+  })
+  const ul = el('ul', { class: 'cc-list', role: 'listbox', 'aria-label': g.name })
+  for (const r of g.rows) ul.append(rowEl(r))
+  d.append(ul)
+  if (g.more > 0) d.append(el('div', { class: 'more cc-muted', text: `${g.more} more not shown: search or narrow by source` }))
+  return d
 }
 
-function listEl() {
-  if (ui.filter === 'off') return offList()
-  if (ui.filter === 'read') return readList()
-  const m = listModel(state.rows, ui.filter, ui.showAll)
-  if (!m.items.length) {
-    const loading = (state.chips || []).some((c) => !c.loaded && !c.problem)
-    const none = !(state.chips || []).length
-    return el('div', { class: 'empty', text: none ? 'No source yet: install or enable a plugin that offers an inbox feed (Chat, Gmail, Jira).' : loading ? 'Loading…' : 'Inbox zero. ☕' })
-  }
-  const ul = el('ul', { class: 'list', role: 'listbox' })
-  for (const { row, divider } of m.items) {
-    if (divider) ul.append(el('div', { class: 'sep' }, el('span', { text: 'FYI' })))
-    ul.append(rowEl(row))
-  }
-  const frag = document.createDocumentFragment()
-  frag.append(ul)
-  if (m.rest > 0) frag.append(el('div', { class: 'fold' }, el('span', { text: `${m.rest} lower in the list` }), button('Show all', () => { ui.showAll = true; render() })))
-  return frag
-}
-
-function chipsEl() {
-  const box = el('div', { class: 'chips' })
-  for (const c of chipsModel(state)) {
-    const cls = ['chip', ui.filter === c.filter && 'on', c.done && 'done', c.read && 'read', c.problem && 'problem', c.color && colorClass(c.color)].filter(Boolean).join(' ')
-    box.append(
-      el('button', { type: 'button', class: cls, onclick: () => { ui.filter = chipFilter(ui.filter, c.filter); ui.showAll = false; ui.menu = null; render() } },
-        c.color ? el('i', {}) : null, c.label, el('span', { class: 'n', text: String(c.count) }))
-    )
-  }
+function emptyEl(text) {
+  if (text === 'loading') return el('div', { class: 'cc-empty' }, el('span', { class: 'cc-spinner' }), el('p', { text: 'Loading the sources…' }))
+  const box = el('div', { class: 'cc-empty' }, el('p', { text }))
+  if (model && model.kind === 'search') box.append(button('Clear search', () => leaveSearch(), 'Clear search (Esc)'))
+  else if (ui.filter !== 'all') box.append(button('Back to Inbox', () => { ui.filter = 'all'; render() }, 'Show every source'))
   return box
 }
 
 // ---- render ----
 
-function selectableKeys() {
-  if (ui.filter === 'off') return []
-  if (ui.filter === 'read') return (state.read || []).map((r) => r.key)
-  return listModel(state.rows, ui.filter, ui.showAll).items.map((x) => x.row.key)
-}
-
-function render() {
-  const r = root()
-  // A redraw replaces every element: keep the keyboard on the selected row if it was in the list.
-  const a = document.activeElement
-  const hadFocus = Boolean(a && a.closest && a.closest('.row'))
-  r.textContent = ''
-  if (!state) {
-    r.append(el('div', { class: 'empty', text: 'Loading…' }))
-    return
+function renderChips() {
+  const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest('.chips [data-filter]')
+  const was = focused ? focused.getAttribute('data-filter') : null
+  chips.textContent = ''
+  for (const c of chipsModel(state, ui.filter)) {
+    const b = el('button', {
+      type: 'button',
+      class: 'cc-chip',
+      'aria-pressed': c.on ? 'true' : 'false',
+      'data-filter': c.filter,
+      title: c.problem ? `${c.label}: see the line below` : undefined,
+      onclick: () => {
+        ui.filter = chipFilter(ui.filter, c.filter)
+        ui.menu = null
+        render()
+      },
+    }, c.color ? el('i', { class: `dot ${c.color}` }) : null, c.label, el('span', { class: 'cc-count', text: String(c.count) }), c.problem ? el('span', { class: 'problem', text: '!' }) : null)
+    chips.append(b)
   }
-  if (state.fatal) {
-    r.append(el('div', { class: 'notice error', text: state.fatal }))
-    return
-  }
-  if (ui.view === 'settings' && typeof renderSettings === 'function') {
-    r.append(renderSettings(state, { post, close: () => { ui.view = 'list'; render() } }))
-    return
-  }
-  if (ui.filter === 'read' ? !Array.isArray(state.read) : ui.filter !== 'all' && ui.filter !== 'off' && !(state.chips || []).some((c) => c.pluginId === ui.filter)) ui.filter = 'all'
-  // Keep the selection on a row that is still there.
-  const keys = selectableKeys()
-  if (!keys.includes(ui.sel)) ui.sel = keys[0] || null
-  if (ui.menu && !keys.includes(ui.menu)) ui.menu = null
-
-  if (ui.notice) r.append(el('div', { class: 'notice error', text: ui.notice }))
-  r.append(chipsEl())
-  for (const line of problemLines(state)) r.append(el('div', { class: 'src-err', text: line }))
-  const place = calendarPlacement(state, wide())
-  if (place === 'side') {
-    r.append(el('div', { class: 'wide-body' }, el('div', { class: 'col' }, listEl()), el('div', { class: 'side' }, calendarBlock(''))))
-  } else {
-    if (place === 'top') r.append(calendarBlock(''))
-    r.append(listEl())
-    if (place === 'bottom') r.append(calendarBlock('bottom'))
-  }
-  if (state.undo && Date.now() < state.undo.until) {
-    r.append(el('div', { class: 'toast' }, el('span', { class: 'text', text: state.undo.label }), button('Undo', () => post('undo'), 'Undo (u)')))
-  }
-  r.append(el('div', { class: 'keys' }, el('kbd', { text: 'j' }), el('kbd', { text: 'k' }), ' move ', el('kbd', { text: 'Enter' }), ' open ', el('kbd', { text: 'e' }), ' done ', el('kbd', { text: 's' }), ' snooze ', el('kbd', { text: 'u' }), ' undo'))
-  if (hadFocus) {
-    const n = r.querySelector('.row.sel')
+  if (was) {
+    const n = chips.querySelector(`[data-filter="${CSS.escape(was)}"]`)
     if (n) n.focus({ preventScroll: true })
   }
 }
 
+function render() {
+  const body = $('body')
+  const lines = $('lines')
+  const toast = $('toast')
+  const notice = $('notice')
+  const a = document.activeElement
+  const hadFocus = Boolean(a && a.closest && a.closest('.inbox-row'))
+  body.textContent = ''
+  lines.textContent = ''
+  toast.textContent = ''
+  notice.textContent = ''
+  if (ui.notice) notice.append(el('div', { class: 'cc-error-line', role: 'alert', text: ui.notice }))
+  if (!state) {
+    body.append(emptyEl('loading'))
+    return
+  }
+  if (state.fatal) {
+    $('toolbar').hidden = true
+    body.append(el('div', { class: 'cc-error-line', role: 'alert', text: String(state.fatal) }))
+    return
+  }
+  $('toolbar').hidden = false
+  ui.filter = validFilter(state, ui.filter)
+  model = viewModel(state, ui)
+  // Keep the selection on a row that is still drawn.
+  const keys = selectableKeys(model)
+  if (!keys.includes(ui.sel)) ui.sel = keys[0] || null
+  if (ui.menu && !keys.includes(ui.menu)) ui.menu = null
+
+  renderChips()
+  for (const line of sourceLines(state, ui.filter)) lines.append(el('div', { class: 'cc-error-line', text: line }))
+
+  if (model.kind === 'search') {
+    body.append(el('div', { class: 'search-h cc-muted', text: `${state.search.count || 0} found for “${model.query}”` }))
+  }
+  for (const g of model.groups) body.append(groupEl(g))
+  if (model.done.length) {
+    const ul = el('ul', { class: 'cc-list', role: 'listbox', 'aria-label': 'Done' })
+    for (const e of model.done) ul.append(doneRowEl(e))
+    if (model.kind === 'search') body.append(el('div', { class: 'cc-group' }, el('div', { class: 'cc-group-title', text: 'Done, no longer in a source' }), ul))
+    else body.append(ul)
+    if (model.kind === 'done' && state.done.count > model.done.length) body.append(el('div', { class: 'more cc-muted', text: `${state.done.count - model.done.length} older not shown` }))
+  }
+  if (model.empty) body.append(emptyEl(model.empty))
+
+  if (state.undo && Date.now() < state.undo.until) {
+    toast.append(el('div', { class: 'toast', role: 'status' }, el('span', { class: 'text', text: String(state.undo.label || '') }), button('Undo', () => post('undo'), 'Undo (u)', 'cc-ghost')))
+  }
+  if (hadFocus) focusSel()
+}
+
 // ---- actions ----
 
-function open(r) {
-  if (!r) return
-  if (r.calendar) post(r.meetUrl ? 'join' : 'calOpen', { eventId: r.id })
-  else post('open', { key: r.key })
+function rowByKey(key) {
+  if (!model) return null
+  for (const g of model.groups) for (const r of g.rows) if (r.key === key) return { done: r.done, snoozed: r.snoozed, canOpen: r.canOpen === true }
+  for (const e of model.done) if (e.key === key) return { done: true, canOpen: e.live === true }
+  return null
 }
 
 function leave(key, msg) {
   // Move the selection now, so the next `e` does not land on nothing while the host answers.
-  const before = selectableKeys()
+  const before = model ? selectableKeys(model) : []
   ui.sel = nextSelection(before, key, before.filter((k) => k !== key))
   ui.menu = null
   post(msg.type, msg)
@@ -260,7 +292,7 @@ const done = (key) => leave(key, { type: 'done', key })
 const snooze = (key, choice) => leave(key, { type: 'snooze', key, choice })
 
 function focusSel() {
-  const n = root().querySelector('.row.sel')
+  const n = document.querySelector('.inbox-row[aria-selected="true"]')
   if (n) {
     n.focus({ preventScroll: true })
     n.scrollIntoView({ block: 'nearest' })
@@ -268,26 +300,32 @@ function focusSel() {
 }
 
 document.addEventListener('keydown', (ev) => {
-  if (!state || state.fatal || ui.view !== 'list') return
+  if (!state || state.fatal || !model) return
   if (ev.target && ev.target.closest && ev.target.closest('input, select, textarea')) return
-  const rows = new Map([...(state.rows || []), ...(ui.filter === 'read' ? state.read || [] : [])].map((r) => [r.key, r]))
-  const a = keyAction(ui, ev.key, selectableKeys(), (k) => rows.get(k), { alt: ev.altKey, ctrl: ev.ctrlKey, meta: ev.metaKey })
-  if (!a) return
+  // A key on a button (Enter, Space) is that button's.
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target && ev.target.closest && ev.target.closest('button, summary')) return
+  const act = keyAction(ui, ev.key, selectableKeys(model), rowByKey, { alt: ev.altKey, ctrl: ev.ctrlKey, meta: ev.metaKey })
+  if (!act) return
   ev.preventDefault()
-  if (a.type === 'select') {
-    ui.sel = a.key
+  if (act.type === 'select') {
+    ui.sel = act.key
     render()
     focusSel()
-  } else if (a.type === 'open') open(rows.get(a.key))
-  else if (a.type === 'done') done(a.key)
-  else if (a.type === 'menu') {
-    ui.menu = a.key
+  } else if (act.type === 'open') post('open', { key: act.key })
+  else if (act.type === 'done') done(act.key)
+  else if (act.type === 'menu') {
+    ui.menu = act.key
     render()
-  } else if (a.type === 'snooze') snooze(a.key, a.choice)
-  else if (a.type === 'closeMenu') {
+  } else if (act.type === 'snooze') snooze(act.key, act.choice)
+  else if (act.type === 'closeMenu') {
     ui.menu = null
     render()
-  } else if (a.type === 'undo') post('undo')
+    focusSel()
+  } else if (act.type === 'undo') post('undo')
+  else if (act.type === 'search') {
+    search.focus()
+    search.select()
+  } else if (act.type === 'leaveSearch') leaveSearch()
 })
 
 // A click anywhere else closes the snooze menu.
@@ -302,9 +340,7 @@ ccPanel.onMessage((m) => {
   if (!m || typeof m !== 'object') return
   if (m.type === 'state') {
     state = m
-    // The settings form is not redrawn under the person's typing: it reads the new state when it
-    // opens again (Save and Cancel go back to the list, which draws then).
-    if (ui.view !== 'settings') gate.request()
+    gate.request()
   } else if (m.type === 'notice' && typeof m.text === 'string') {
     ui.notice = m.text
     clearTimeout(noticeTimer)
@@ -312,10 +348,6 @@ ccPanel.onMessage((m) => {
       ui.notice = null
       gate.request()
     }, 8000)
-    gate.request()
-  } else if (m.type === 'view' && (m.view === 'settings' || m.view === 'list')) {
-    // The title bar's settings button: a second press goes back to the list.
-    ui.view = ui.view === m.view ? 'list' : m.view
     gate.request()
   }
 })
@@ -325,15 +357,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') post('visible')
 })
 window.addEventListener('focus', () => post('visible'))
-window.addEventListener('resize', () => {
-  if (state && state.calendar && state.calendar.position === 'beside') gate.request()
-})
-// Ages, countdowns, the now marker; not while the menu is open or the focus is in a field.
+// The ages; not while the snooze menu is open.
 setInterval(() => {
-  if (state && ui.view === 'list' && !ui.menu) gate.request()
+  if (state && !ui.menu) gate.request()
 }, 15000)
 setInterval(() => {
-  if (state && state.undo && Date.now() >= state.undo.until && root().querySelector('.toast')) gate.request()
+  if (state && state.undo && Date.now() >= state.undo.until && $('toast').firstChild) gate.request()
 }, 1000)
 
+$('toolbar').append(search, chips)
+render()
 post('hello')
