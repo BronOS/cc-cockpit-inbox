@@ -218,6 +218,7 @@ function fakeAppStorage() {
 function fakeCtx(opts = {}) {
   const panelListeners = []
   const actionListeners = []
+  const pageOpeners = []
   const ctx = {
     api: 1,
     pluginId: 'bronos.inbox',
@@ -284,7 +285,48 @@ function fakeCtx(opts = {}) {
       },
     },
     settingsPage: {
-      onOpen: () => () => {},
+      onOpen: (fn) => {
+        pageOpeners.push(fn)
+        return () => pageOpeners.splice(pageOpeners.indexOf(fn), 1)
+      },
+    },
+    /**
+     * The settings page opened in this window: the host's `onOpen` listeners get a page like the app's
+     * (`scope`, `post`, `onMessage`, `onClose`). Resolves `{ posts, send(m), close(), last(type) }`;
+     * `send` waits for the host's handlers, `posts` are copies, as the port's JSON would make them.
+     */
+    openSettingsPage(scope = 'app') {
+      const listeners = []
+      const closers = []
+      const page = {
+        posts: [],
+        async send(m) {
+          for (const fn of listeners) await fn(structuredClone(m))
+        },
+        close() {
+          for (const fn of closers.splice(0)) fn()
+        },
+        last(type) {
+          return [...page.posts].reverse().find((m) => m.type === type)
+        },
+      }
+      const instance = Object.freeze({
+        scope,
+        post: (m) => {
+          if (JSON.stringify(m).length > 1024 * 1024) throw new Error('settings page message over 1 MiB')
+          page.posts.push(JSON.parse(JSON.stringify(m)))
+        },
+        onMessage: (fn) => {
+          listeners.push(fn)
+          return () => listeners.splice(listeners.indexOf(fn), 1)
+        },
+        onClose: (fn) => {
+          closers.push(fn)
+          return () => closers.splice(closers.indexOf(fn), 1)
+        },
+      })
+      for (const fn of pageOpeners) fn(instance)
+      return page
     },
     /** The header action `id` clicked. */
     clickAction(id) {
@@ -319,6 +361,7 @@ function fakeCtx(opts = {}) {
         timers: ctx.schedules.filter((s) => !s.stopped).length,
         cli: Boolean(ctx.cliHandler),
         feed: ctx.feedListenerCount(),
+        settingsPage: pageOpeners.length,
       }
     },
     lastState() {

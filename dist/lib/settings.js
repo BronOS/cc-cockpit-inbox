@@ -15,8 +15,13 @@
 //   not there goes to Rest (the settings page moves a deleted group's rules there too).
 // - Rest (`rest`) is built in: always there, always last; it can be renamed and its collapsed and
 //   badge flags set like any group.
+//
+// A save from the settings page goes through `checkSettings` first: where `readSettings` quietly
+// drops what does not fit (right for a stored value), a save is refused with the reason, so the
+// person sees why ("rule 3, condition 2: time newerThan needs a whole number of minutes") instead
+// of a rule that silently vanished.
 
-const { REST, conditionOf } = require('./rules')
+const { REST, conditionOf, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./rules')
 
 const KEY = 'settings'
 const VERSION = 2
@@ -164,6 +169,99 @@ function readSettings(raw) {
   return { version: VERSION, groups: g, rules: rulesOf(rules, new Set(g.map((x) => x.id))), agenda }
 }
 
+/** What a value of each kind of the field table must be, for a refusal's reason. */
+const NEEDS = Object.freeze({
+  text: `text of 1 to ${MAX_VALUE} characters`,
+  kind: `one of ${KINDS.join(', ')}`,
+  to: `one of ${TO.join(', ')}`,
+  bool: 'true or false',
+  read: 'true, false or null',
+  minutes: `a whole number of minutes from 1 to ${MAX_MINUTES}`,
+})
+
+/** A short, quoted form of an untrusted value for a reason (it is shown as text, never markup). */
+const shown = (v) => {
+  const s = typeof v === 'string' ? v : String(v)
+  return JSON.stringify(s.length > 40 ? `${s.slice(0, 39)}…` : s)
+}
+
+/** Why a condition does not fit the field table, or null when it does (rules.js `conditionOf` decides). */
+function conditionProblem(raw) {
+  if (!isObj(raw)) return 'is not a condition'
+  const field = own(raw, 'field')
+  if (typeof field !== 'string' || !Object.hasOwn(FIELDS, field)) return `has no known field (${shown(field)})`
+  const spec = FIELDS[field]
+  const op = own(raw, 'op')
+  if (!spec.ops.includes(op)) return `${field} takes ${spec.ops.join(', ')}, not ${shown(op)}`
+  if (conditionOf(raw)) return null
+  if (op === 'in') return `${field} in needs a list of 1 to ${MAX_IN} values, each ${NEEDS[spec.value]}`
+  return `${field} ${op} needs ${NEEDS[spec.value]}`
+}
+
+/**
+ * A save from the settings page, checked: `{ ok: true, settings }` (clean, what `readSettings` keeps:
+ * Rest moved last) or `{ ok: false, reason }` naming the first thing that does not fit, by position
+ * ("group 2", "rule 3, condition 1"). Nothing a check refuses would have survived `readSettings`
+ * unchanged.
+ */
+function checkSettings(raw) {
+  const no = (reason) => ({ ok: false, reason })
+  if (!isObj(raw)) return no('the settings are not an object')
+  if (own(raw, 'version') !== VERSION) return no('these are not Inbox v2 settings (version 2)')
+  if (!AGENDA.includes(own(raw, 'agenda'))) return no('the agenda must be top, bottom or off')
+  const groups = own(raw, 'groups')
+  const rules = own(raw, 'rules')
+  if (!Array.isArray(groups)) return no('the groups are not a list')
+  if (!Array.isArray(rules)) return no('the rules are not a list')
+  if (groups.length > CAPS.groups) return no(`at most ${CAPS.groups} groups, Rest included`)
+  const ids = new Set()
+  for (const [i, g] of groups.entries()) {
+    const n = i + 1
+    const id = own(g, 'id')
+    if (typeof id !== 'string' || !ID.test(id)) return no(`group ${n} has a bad id`)
+    if (ids.has(id)) return no(`group ${n}: the id ${shown(id)} is used twice`)
+    ids.add(id)
+    if (line(own(g, 'name'), CAPS.groupName) === undefined) return no(`group ${n} needs a name of 1 to ${CAPS.groupName} characters`)
+  }
+  if (!ids.has(REST)) return no('the Rest group is missing')
+  if (rules.length > CAPS.rules) return no(`at most ${CAPS.rules} rules`)
+  const ruleIds = new Set()
+  for (const [i, r] of rules.entries()) {
+    const n = i + 1
+    if (!isObj(r)) return no(`rule ${n} is not a rule`)
+    const id = own(r, 'id')
+    if (typeof id !== 'string' || !ID.test(id)) return no(`rule ${n} has a bad id`)
+    if (ruleIds.has(id)) return no(`rule ${n}: the id ${shown(id)} is used twice`)
+    ruleIds.add(id)
+    const name = own(r, 'name')
+    if (name !== undefined && name !== null && name !== '' && line(name, CAPS.ruleName) === undefined) {
+      return no(`rule ${n}: the name must be 1 to ${CAPS.ruleName} characters on one line`)
+    }
+    const enabled = own(r, 'enabled')
+    if (enabled !== undefined && typeof enabled !== 'boolean') return no(`rule ${n}: enabled must be true or false`)
+    const group = own(r, 'group')
+    if (typeof group !== 'string' || !ids.has(group)) return no(`rule ${n} goes to a group that is not there (${shown(group)})`)
+    const when = own(r, 'when')
+    if (when !== undefined) {
+      if (!Array.isArray(when)) return no(`rule ${n}: the conditions are not a list`)
+      if (when.length > CAPS.conditions) return no(`rule ${n} has more than ${CAPS.conditions} conditions`)
+      for (const [j, c] of when.entries()) {
+        const p = conditionProblem(c)
+        if (p) return no(`rule ${n}, condition ${j + 1}: ${p}`)
+      }
+    }
+    const jev = own(r, 'jev')
+    if (jev !== undefined) {
+      if (!isObj(jev)) return no(`rule ${n}: the Jev question is not an object`)
+      if (line(own(jev, 'question'), CAPS.question) === undefined) return no(`rule ${n}: the Jev question needs 1 to ${CAPS.question} characters`)
+      const min = own(jev, 'min')
+      if (typeof min !== 'number' || !Number.isFinite(min) || min < 0 || min > 1) return no(`rule ${n}: the Jev threshold must be a number from 0 to 1`)
+    }
+    if (!(Array.isArray(when) && when.length) && jev === undefined) return no(`rule ${n} needs a condition or a Jev question`)
+  }
+  return { ok: true, settings: readSettings(raw) }
+}
+
 async function loadSettings(store) {
   return readSettings(await store.get(KEY))
 }
@@ -180,4 +278,4 @@ async function resetSettings(store) {
   return saveSettings(store, defaults())
 }
 
-module.exports = { KEY, VERSION, AGENDA, CAPS, ID, defaults, readSettings, loadSettings, saveSettings, resetSettings }
+module.exports = { KEY, VERSION, AGENDA, CAPS, ID, defaults, readSettings, checkSettings, conditionProblem, loadSettings, saveSettings, resetSettings }

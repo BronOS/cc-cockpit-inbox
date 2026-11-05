@@ -20,12 +20,19 @@
 //
 // Actions from the panel and the overlay toolbar name an item by its key (`pluginId \0 id`); the host
 // looks it up in what the sources gave and never takes an id, a rev or an action list from a page.
+//
+// The settings page (settings/index.html, `ctx.settingsPage`) edits a draft and sends it whole: the
+// host checks every save with lib/settings.js `checkSettings` and refuses one that does not fit with
+// the reason, stores and applies one that does. It also answers the page's "Test" of one rule over the
+// items it holds now, with cached Jev answers only (never a request). The page gets the settings, the
+// field table, the sources (label, scope, state, count) and whether a `jev` provider is there; Inbox
+// has no secrets, and nothing else goes to it.
 
 const { actReplyOf } = require('./lib/feed')
 const { createSources } = require('./lib/sources')
 const { createJev } = require('./lib/jev')
 const { createState, untilOf } = require('./lib/state')
-const { placeItem, keyOf, byTime, REST } = require('./lib/rules')
+const { placeItem, checkRule, keyOf, byTime, REST, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./lib/rules')
 const { search } = require('./lib/search')
 const S = require('./lib/settings')
 const CLI = require('./lib/cli')
@@ -56,6 +63,9 @@ const NOTIFY_MAX = 3
 const SNOOZES = new Set(['1h', 'afternoon', 'tomorrow', 'changes'])
 // v1's default times (v1 had a setting for them; v2's settings hold groups, rules and the agenda only).
 const SNOOZE_TIMES = { afternoon: '14:00', morning: '09:00' }
+// The settings page's "Test": examples shown, and their titles cut (the page draws text only).
+const TEST_EXAMPLES = 5
+const TEST_TITLE = 120
 const OLD_APP = 'Inbox 0.2.0 needs cc-cockpit 0.10.0 or newer (slots, overlay buttons and the services collector). Update the app.'
 
 // What a failed panel action is called in its notice: the button's words, not the message type.
@@ -608,6 +618,132 @@ function createInbox(ctx, opts = {}) {
   )
   disposers.push(ctx.schedule(REFRESH_S, () => tick()))
 
+  // ---- the settings page ----
+
+  /** What the editor needs to offer only what a save accepts: fields, ops, value kinds and caps. */
+  const TABLE = Object.freeze({
+    fields: FIELDS,
+    kinds: KINDS,
+    to: TO,
+    rest: REST,
+    agenda: S.AGENDA,
+    caps: { ...S.CAPS, in: MAX_IN, value: MAX_VALUE, minutes: MAX_MINUTES },
+  })
+
+  /** The sources as the page lists them (read-only): label, kind, scope, state, item count. */
+  function pageSources() {
+    return sources.list().map((s) => ({
+      pluginId: s.pluginId,
+      label: s.desc.label,
+      badge: s.desc.badge,
+      color: s.desc.color,
+      kind: s.desc.kind,
+      ...(s.desc.scope ? { scope: s.desc.scope } : {}),
+      state: s.state,
+      ...(s.message ? { message: s.message } : {}),
+      count: s.items.length,
+    }))
+  }
+
+  /**
+   * One rule of a draft tried over the items Inbox shows now (Done and snoozed left out), with cached
+   * Jev answers only: how many it would place where it stands (earlier rules take theirs first), how
+   * many it holds for on its own, how many wait for a Jev answer, and five of the placed ones. A
+   * disabled rule is tried as if enabled. The draft is checked like a save first.
+   */
+  function testRule(raw, ruleId) {
+    const checked = S.checkSettings(raw)
+    if (!checked.ok) return { ok: false, reason: checked.reason }
+    const draft = checked.settings
+    const idx = draft.rules.findIndex((r) => r.id === ruleId)
+    if (idx < 0) return { ok: false, reason: 'that rule is not in the draft' }
+    const rule = { ...draft.rules[idx], enabled: true }
+    const tried = { ...draft, rules: draft.rules.map((r, i) => (i === idx ? rule : r)) }
+    const t = now()
+    build(t)
+    const kindOf = (id) => descOf(id).kind
+    const o = { now: t, kindOf, jevAnswer: jev.cachedAnswer }
+    const placedRows = []
+    let total = 0
+    let holds = 0
+    let pending = 0
+    for (const [key, item] of view.live) {
+      if (state.status(item, t).hidden) continue
+      total++
+      const r = checkRule(rule, item, { kind: kindOf(item.source), now: t, jevAnswer: jev.cachedAnswer })
+      if (r.result === 'held') holds++
+      else if (r.result === 'pending') pending++
+      const p = placeItem(tried, item, o)
+      if (p.ruleId === rule.id) placedRows.push({ key, item, placement: p })
+    }
+    placedRows.sort(byTime)
+    return {
+      ok: true,
+      rule: idx + 1,
+      total,
+      placed: placedRows.length,
+      holds,
+      pending,
+      jev: Boolean(rule.jev) && jev.available(),
+      examples: placedRows.slice(0, TEST_EXAMPLES).map((r) => {
+        const d = descOf(r.item.source)
+        return { title: cut(r.item.title, TEST_TITLE), label: d.label, badge: d.badge, color: d.color, reason: r.placement.reason }
+      }),
+    }
+  }
+
+  const testId = (m) => (typeof m.ruleId === 'string' ? m.ruleId.slice(0, 40) : '')
+
+  function onSettingsPage(page) {
+    const send = (m) => {
+      try {
+        page.post(m)
+      } catch (e) {
+        ctx.log.warn(`settings page: ${why(e)}`)
+      }
+    }
+    const sendSettings = (saved) => send({ type: 'settings', saved, settings, table: TABLE, defaults: S.defaults(), sources: pageSources(), jev: jev.available() })
+    let closed = false
+    page.onClose(() => {
+      closed = true
+    })
+    if (page.scope !== 'app') {
+      send({ type: 'fatal', reason: "Inbox's settings are app-wide: edit them under Settings > Plugins." })
+      return
+    }
+    page.onMessage(async (m) => {
+      if (!isObj(m) || typeof m.type !== 'string') return
+      try {
+        if (m.type === 'ready') {
+          // Another window may have saved since this one last read: the page starts from the stored value.
+          applySettings(await S.loadSettings(ctx.appStorage))
+          sendSettings(false)
+          // The sources are still being read: send them again once they are.
+          if (!started) void first.then(() => !closed && sendSettings(false))
+        } else if (m.type === 'save') {
+          const checked = S.checkSettings(m.settings)
+          if (!checked.ok) return send({ type: 'refused', reason: checked.reason })
+          await saveSettings(checked.settings)
+          sendSettings(true)
+        } else if (m.type === 'test') {
+          send({ type: 'test', ruleId: testId(m), result: testRule(m.settings, m.ruleId) })
+        }
+      } catch (e) {
+        ctx.log.warn(`settings page ${m.type}: ${why(e)}`)
+        if (m.type === 'test') send({ type: 'test', ruleId: testId(m), result: { ok: false, reason: why(e) } })
+        else send({ type: 'refused', reason: `${m.type === 'save' ? 'Saving' : 'That'} failed: ${why(e)}` })
+      }
+    })
+  }
+
+  if (typeof ctx.settingsPage === 'object' && ctx.settingsPage !== null && typeof ctx.settingsPage.onOpen === 'function') {
+    try {
+      disposers.push(ctx.settingsPage.onOpen(onSettingsPage))
+    } catch (e) {
+      ctx.log.warn(`settings page: ${why(e)}`)
+    }
+  }
+
   const first = (async () => {
     await reloadShared()
     placeAgenda()
@@ -685,6 +821,7 @@ function createInbox(ctx, opts = {}) {
     dispose,
     act: onPanelMessage,
     saveSettings,
+    testRule,
     snapshot: () => {
       build(now())
       return snapshot(now())

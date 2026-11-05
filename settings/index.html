@@ -3,11 +3,60 @@
   <head>
     <meta charset="utf-8" />
     <title>Inbox settings</title>
-    <!-- Placeholder until the rules editor (groups, rules, Jev questions, sources, agenda) lands on
-      this page. The manifest names it already so the app shows Inbox's settings in one place. -->
+    <!-- Inbox's settings page (contributes.settings.page, scope app; docs/design-v2.md "Settings page"):
+      groups, rules, the sources (read-only) and where the agenda goes. The page CSP allows script from
+      this plugin's own files only, so the logic lives in index.js; logic.js holds its pure parts. The
+      SDK gives `ccPanel` (the port to dist/host.js), the theme variables and the component stylesheet
+      (`ccc guide style`: .cc-toolbar, .cc-card, .cc-list, .cc-row, .cc-field, .cc-badge,
+      .cc-error-line, .cc-empty). The rules below only lay those out (unlayered, so they win over the
+      layer); colours only from the theme tokens. -->
     <script src="/__sdk/panel.js"></script>
+    <script src="logic.js" defer></script>
+    <script src="index.js" defer></script>
+    <style>
+      body { margin: 0; background: var(--cc-bg); }
+      [hidden] { display: none; }
+      .cc-toolbar { position: sticky; top: 0; z-index: 3; background: var(--cc-bg); border-bottom: 1px solid var(--cc-border); }
+      .cc-toolbar .status { flex: 1; min-width: 0; font-size: var(--cc-text-s); }
+      #error:not(:empty) { padding: var(--cc-space-3) var(--cc-space-3) 0; }
+      #main { display: flex; flex-direction: column; gap: var(--cc-space-3); padding: var(--cc-space-3) var(--cc-space-3) var(--cc-space-4); }
+      .cc-card > .cc-help { display: block; margin: 0 0 var(--cc-space-2); }
+      .line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cc-space-2); }
+      .check { display: inline-flex; align-items: center; gap: var(--cc-space-1); white-space: nowrap; }
+      .num { flex: none; width: 2.2em; color: var(--cc-fg-muted); font-size: var(--cc-text-s); text-align: right; }
+
+      /* Groups: the name field takes the room, the flags and moves after it. */
+      .group-row .name { flex: 1 1 140px; min-width: 0; }
+      .group-row .fixed { font-size: var(--cc-text-s); }
+      .add { margin-top: var(--cc-space-2); }
+      .add input { flex: 1 1 160px; min-width: 0; }
+
+      /* Rules: one row each, the editor below the open one. */
+      .rule-row .cc-row-title { white-space: normal; overflow-wrap: anywhere; }
+      .rule-row.off .cc-row-title { color: var(--cc-fg-muted); }
+      .rule-row .cc-row-actions button { height: 22px; padding: 0 var(--cc-space-2); font-size: var(--cc-text-s); }
+      .editor { display: flex; flex-direction: column; gap: var(--cc-space-2); margin: 0 0 var(--cc-space-2) calc(2.2em + var(--cc-space-3)); padding: var(--cc-space-3); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-m); background: var(--cc-bg); }
+      .editor .cc-field { margin: 0; }
+      .cond { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--cc-space-1); }
+      .cond select { max-width: 100%; }
+      .cond textarea { flex: 1 1 180px; min-width: 0; resize: vertical; }
+      .cond input[type='text'] { flex: 1 1 160px; min-width: 0; }
+      .cond input[type='number'] { width: 7em; }
+      .cond .checks { display: flex; flex-wrap: wrap; gap: var(--cc-space-2); align-items: center; min-height: var(--cc-control-h); }
+      .jev textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+      .jev input[type='number'] { width: 6em; }
+      .test { font-size: var(--cc-text-s); }
+      .test .cc-list { margin-top: var(--cc-space-1); }
+      .test .cc-row { min-height: 0; padding-block: 2px; }
+      .test .cc-badge { flex: none; }
+
+      .source-row .cc-badge { flex: none; min-width: 40px; justify-content: center; }
+      .agenda { display: flex; flex-wrap: wrap; gap: var(--cc-space-4); }
+    </style>
   </head>
   <body>
-    <p class="cc-muted">The Inbox rules editor is not built yet. Inbox uses its default groups and rules.</p>
+    <div class="cc-toolbar" id="bar"></div>
+    <div id="error"></div>
+    <div id="main"></div>
   </body>
 </html>
