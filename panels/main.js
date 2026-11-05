@@ -28,6 +28,7 @@ const ui = {
 }
 let noticeTimer = null
 let searchTimer = null
+let searchSynced = false
 let model = null
 // Redraws from a state message or a timer wait while a mouse button is down (rowlogic.js
 // createRenderGate: a redraw between press and release loses the click). Redraws a click itself asks
@@ -171,14 +172,15 @@ function doneRowEl(e) {
 
 function groupEl(g) {
   const d = el('details', { class: 'cc-group', open: g.open, 'data-group': g.id },
-    el('summary', { class: 'cc-group-title' }, el('span', { text: g.name }), el('span', { class: 'cc-count', text: String(g.count) })))
+    el('summary', { class: 'cc-group-title', 'data-group': g.id }, el('span', { text: g.name }), el('span', { class: 'cc-count', text: String(g.count) })))
   // Setting `open` while building fires a `toggle` too: only a change from what was drawn is the person's.
   d.addEventListener('toggle', () => {
     if (d.open === g.open) return
-    ui.open[g.id] = d.open
+    // Search shows every group open: a click there does nothing (and is not remembered for the list).
+    if (!(model && model.kind === 'search')) ui.open[g.id] = d.open
     render()
   })
-  const ul = el('ul', { class: 'cc-list', role: 'listbox', 'aria-label': g.name })
+  const ul = el('ul', { class: 'cc-list', 'aria-label': g.name })
   for (const r of g.rows) ul.append(rowEl(r))
   d.append(ul)
   if (g.more > 0) d.append(el('div', { class: 'more cc-muted', text: `${g.more} more not shown: search or narrow by source` }))
@@ -227,6 +229,9 @@ function render() {
   const notice = $('notice')
   const a = document.activeElement
   const hadFocus = Boolean(a && a.closest && a.closest('.inbox-row'))
+  // A group opened or closed from the keyboard keeps focus on its summary through the redraw.
+  const sum = a && a.closest && a.closest('summary[data-group]')
+  const hadSummary = sum ? sum.getAttribute('data-group') : null
   body.textContent = ''
   lines.textContent = ''
   toast.textContent = ''
@@ -253,11 +258,11 @@ function render() {
   for (const line of sourceLines(state, ui.filter)) lines.append(el('div', { class: 'cc-error-line', text: line }))
 
   if (model.kind === 'search') {
-    body.append(el('div', { class: 'search-h cc-muted', text: `${state.search.count || 0} found for “${model.query}”` }))
+    body.append(el('div', { class: 'search-h cc-muted', text: searchHeader(model) }))
   }
   for (const g of model.groups) body.append(groupEl(g))
   if (model.done.length) {
-    const ul = el('ul', { class: 'cc-list', role: 'listbox', 'aria-label': 'Done' })
+    const ul = el('ul', { class: 'cc-list', 'aria-label': 'Done' })
     for (const e of model.done) ul.append(doneRowEl(e))
     if (model.kind === 'search') body.append(el('div', { class: 'cc-group' }, el('div', { class: 'cc-group-title', text: 'Done, no longer in a source' }), ul))
     else body.append(ul)
@@ -269,6 +274,10 @@ function render() {
     toast.append(el('div', { class: 'toast', role: 'status' }, el('span', { class: 'text', text: String(state.undo.label || '') }), button('Undo', () => post('undo'), 'Undo (u)', 'cc-ghost')))
   }
   if (hadFocus) focusSel()
+  else if (hadSummary) {
+    const n = body.querySelector(`summary[data-group="${CSS.escape(hadSummary)}"]`)
+    if (n) n.focus({ preventScroll: true })
+  }
 }
 
 // ---- actions ----
@@ -340,6 +349,14 @@ ccPanel.onMessage((m) => {
   if (!m || typeof m !== 'object') return
   if (m.type === 'state') {
     state = m
+    // The query lives in the host and outlives this page: a reloaded page shows it in the field.
+    if (!searchSynced) {
+      searchSynced = true
+      if (m.search && typeof m.search.query === 'string' && search.value === '') {
+        search.value = m.search.query
+        ui.searching = m.search.query !== ''
+      }
+    }
     gate.request()
   } else if (m.type === 'notice' && typeof m.text === 'string') {
     ui.notice = m.text

@@ -165,6 +165,12 @@ test('search results: grouped as the list, every group open, Done hits marked, t
   assert.deepEqual(m.groups.map((g) => [g.id, g.open, g.rows.map((r) => r.id)]), [['chat', true, ['a', 'd']], ['rest', true, ['m']]])
   assert.deepEqual(m.done.map((e) => e.id), ['old'])
   assert.deepEqual(R.selectableKeys(m), ['p.chat\u0000a', 'p.chat\u0000d', 'p.mail\u0000m', 'p.mail\u0000old'])
+  // A bare Done hit takes its source's badge, colour and label; the header counts what is drawn.
+  assert.deepEqual(R.doneRowModel(m.done[0]).badge, 'X')
+  assert.equal(R.doneRowModel(m.done[0]).source, 'mail')
+  assert.equal(R.searchHeader(m), '4 found for “lunch”')
+  assert.equal(R.searchHeader(R.viewModel(s, { filter: 'p.mail' })), '2 found for “lunch”')
+  assert.equal(R.searchHeader({ drawn: 4, query: 'q', cut: 6 }), '4 found for “q”, 6 more not shown: narrow the search')
   assert.deepEqual(R.viewModel(s, { filter: 'p.mail' }).groups.map((g) => g.id), ['rest'])
   const doneOnly = R.viewModel(s, { filter: 'done' })
   assert.deepEqual(doneOnly.groups.map((g) => g.rows.map((r) => r.id)), [['d']])

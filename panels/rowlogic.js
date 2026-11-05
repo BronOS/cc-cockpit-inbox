@@ -188,8 +188,18 @@ function viewModel(state, ui) {
         return { id: g.id, name: str(g.name), count: rows.length, more: 0, open: true, rows }
       })
       .filter((g) => g.rows.length)
-    const done = arr(q.done).filter(bySource)
-    return { kind: 'search', query: str(q.query), groups, done, empty: groups.length || done.length ? null : `No match for “${str(q.query)}”.` }
+    // The host sends a hit with no live item bare (no badge, colour, label): the source's own are used.
+    const done = arr(q.done)
+      .filter(bySource)
+      .map((e) => {
+        const s = sources.find((x) => x.pluginId === e.source)
+        return s ? { badge: s.badge, color: s.color, label: s.label, ...e } : e
+      })
+    // What is drawn (a chip narrows it) against what the host found: it sends at most 200 rows.
+    const drawn = groups.reduce((n, g) => n + g.rows.length, 0) + done.length
+    const sent = arr(q.groups).reduce((n, g) => n + arr(g.rows).length, 0) + arr(q.done).length
+    const found = Number.isFinite(q.count) ? q.count : sent
+    return { kind: 'search', query: str(q.query), groups, done, drawn, cut: Math.max(0, found - sent), empty: groups.length || done.length ? null : `No match for “${str(q.query)}”.` }
   }
   if (filter === 'done') {
     const done = arr(state && state.done && state.done.rows)
@@ -210,6 +220,12 @@ function viewModel(state, ui) {
     else empty = 'Inbox zero: nothing needs you.'
   }
   return { kind: 'groups', groups, done: [], empty }
+}
+
+/** The line above search results: the rows drawn, and how many the host found but did not send. */
+function searchHeader(model) {
+  const cut = model.cut > 0 ? `, ${model.cut} more not shown: narrow the search` : ''
+  return `${model.drawn} found for “${model.query}”${cut}`
 }
 
 /** The row keys the keyboard moves over, in drawn order: rows of open groups, then the Done rows. */
@@ -317,6 +333,7 @@ function createRenderGate(draw, defer = (fn) => setTimeout(fn, 0)) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    searchHeader,
     COLORS,
     SNOOZE_TIMES,
     colorName,
