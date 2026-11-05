@@ -386,3 +386,179 @@ test('a rule without a question is unavailable', () => {
   assert.equal(j.answer({ id: 'x', jev: { question: '' } }, it('bronos.gmail', 'm1')), 'unavailable')
   assert.equal(j.answer({ id: 'x' }, it('bronos.gmail', 'm1')), 'unavailable')
 })
+
+// --- deadlines, retries, parking, sweep -----------------------------------------------------
+
+test('a grid that never settles times out: unavailable, the lane is free again, pending() drains', async () => {
+  const jev = fakeJev()
+  const real = jev.impl.grid
+  let hang = true
+  jev.impl.grid = (...args) => (hang ? (jev.calls.push({ hung: true }), new Promise(() => {})) : real(...args))
+  const { clock, answered, j } = setup({ jev })
+  const a = it('bronos.gmail', 'm1')
+  assert.equal(j.answer(urgent, a), 'pending')
+  await clock.advance(0)
+  assert.equal(jev.calls.length, 1)
+  j.answer(urgent, it('bronos.gmail', 'm2'))
+  await clock.advance(J.CALL_TIMEOUT_MS - 1)
+  assert.equal(j.pending(), 2, 'm1 in flight, m2 waits behind it')
+  assert.equal(answered.length, 0)
+  hang = false
+  await clock.advance(1)
+  assert.deepEqual(answered[0], [{ pluginId: 'bronos.gmail', id: 'm1' }], 'the timeout counts as a failure')
+  assert.equal(j.answer(urgent, a), 'unavailable', 'blocked 10 minutes like any failure')
+  await clock.advance(0)
+  assert.equal(jev.calls.length, 2, 'the next batch of the question went')
+  assert.deepEqual(j.answer(urgent, it('bronos.gmail', 'm2')), { score: 0.9 })
+  assert.equal(j.pending(), 0)
+})
+
+test('a failure tells the host again when the 10 minutes are up, so the item is asked anew', async () => {
+  const { clock, jev, answered, j } = setup()
+  jev.fail = new Error('jev: monthly cap reached')
+  const a = it('bronos.gmail', 'm1')
+  j.answer(urgent, a)
+  await clock.advance(0)
+  assert.equal(answered.length, 1)
+  jev.fail = null
+  await clock.advance(J.RETRY_MS - 1)
+  assert.equal(answered.length, 1)
+  await clock.advance(1)
+  assert.deepEqual(answered[1], [{ pluginId: 'bronos.gmail', id: 'm1' }])
+  // the host places the item again on that call
+  assert.equal(j.answer(urgent, a), 'pending')
+  await clock.advance(0)
+  assert.deepEqual(j.answer(urgent, a), { score: 0.9 })
+  await clock.advance(J.RETRY_MS)
+  assert.equal(answered.length, 3, 'an answered item gets no more retry calls')
+})
+
+test('a provider that appears later: the parked items reach onAnswer within a minute', async () => {
+  const jev = fakeJev()
+  jev.present = false
+  const { clock, answered, j } = setup({ jev })
+  const a = it('bronos.gmail', 'm1')
+  assert.equal(j.answer(urgent, a), 'unavailable')
+  assert.equal(j.answer({ ...urgent, jev: { question: 'Other?', min: 0.5 } }, a), 'unavailable')
+  await clock.advance(J.PARK_CHECK_MS * 3)
+  assert.equal(answered.length, 0, 'still no provider: nothing to tell')
+  assert.equal(jev.calls.length, 0)
+  jev.present = true
+  await clock.advance(J.PARK_CHECK_MS)
+  assert.deepEqual(answered, [[{ pluginId: 'bronos.gmail', id: 'm1' }]], 'once per item')
+  assert.equal(j.answer(urgent, a), 'pending')
+  await clock.advance(0)
+  assert.deepEqual(j.answer(urgent, a), { score: 0.9 })
+  assert.equal(clock.armed(), 0, 'no check left running')
+})
+
+test('sweep: queued requests of items gone or of an edited question are never asked', async () => {
+  const jev = fakeJev()
+  let release
+  const slow = jev.impl.grid
+  jev.impl.grid = async (...args) => {
+    await new Promise((r) => (release = r))
+    return slow(...args)
+  }
+  const { clock, j } = setup({ jev })
+  const old = { ...urgent, jev: { question: 'Is this urgent now?', min: 0.8 } }
+  j.answer(urgent, it('bronos.gmail', 'first'))
+  await clock.advance(0) // 'first' in flight, holding the lane
+  j.sweep(() => {
+    for (const id of ['a', 'b', 'c']) j.answer(urgent, it('bronos.gmail', id))
+    j.answer(old, it('bronos.gmail', 'a'))
+  })
+  assert.equal(j.pending(), 5)
+  // the next full placement: 'b' left the feed, the question 'old' was edited away
+  const out = j.sweep(() => {
+    j.answer(urgent, it('bronos.gmail', 'first'))
+    j.answer(urgent, it('bronos.gmail', 'a'))
+    j.answer(urgent, it('bronos.gmail', 'c'))
+    return 'placed'
+  })
+  assert.equal(out, 'placed')
+  assert.equal(j.pending(), 3, 'first in flight, a and c queued')
+  release()
+  await clock.advance(0)
+  await clock.advance(2000)
+  release()
+  await clock.advance(0)
+  const asked = jev.calls.map((c) => [c.questions.q.instructions, c.items.length])
+  assert.deepEqual(asked, [
+    ['Is this urgent?', 1],
+    ['Is this urgent?', 2],
+  ])
+  assert.equal(j.pending(), 0)
+  // a throw in the placement drops nothing
+  j.answer(urgent, it('bronos.gmail', 'z'))
+  assert.throws(() =>
+    j.sweep(() => {
+      throw new Error('boom')
+    })
+  )
+  assert.equal(j.pending(), 1)
+})
+
+test('sweep also forgets parked items that left the feed', async () => {
+  const jev = fakeJev()
+  jev.present = false
+  const { clock, answered, j } = setup({ jev })
+  j.answer(urgent, it('bronos.gmail', 'gone'))
+  j.answer(urgent, it('bronos.gmail', 'kept'))
+  j.sweep(() => j.answer(urgent, it('bronos.gmail', 'kept')))
+  jev.present = true
+  await clock.advance(J.PARK_CHECK_MS)
+  assert.deepEqual(answered, [[{ pluginId: 'bronos.gmail', id: 'kept' }]])
+})
+
+test('a full queue parks the item instead of growing', async () => {
+  const jev = fakeJev()
+  jev.impl.grid = () => new Promise(() => {}) // the lane stays busy: nothing leaves the queue
+  const { clock, answered, j } = setup({ jev })
+  j.answer(urgent, it('bronos.gmail', 'busy'))
+  await clock.advance(0)
+  for (let i = 0; i < J.QUEUE_MAX; i++) assert.equal(j.answer(urgent, it('bronos.gmail', `m${i}`)), 'pending')
+  assert.equal(j.answer(urgent, it('bronos.gmail', 'over')), 'unavailable')
+  assert.equal(j.answer(urgent, it('bronos.gmail', 'm0', { rev: 'm0-r2' })), 'pending', 'a queued item may still change rev')
+  assert.equal(j.pending(), J.QUEUE_MAX + 1)
+  await clock.advance(J.PARK_CHECK_MS)
+  assert.ok(answered.some((refs) => refs.some((r) => r.id === 'over')), 'told again later')
+  j.dispose()
+})
+
+test('the seen bump never writes an old rev over a newer one from another window', async () => {
+  const shared = fakeAppStorage()
+  const one = setup({ store: shared })
+  const a = it('bronos.gmail', 'm1', { rev: 'r1' })
+  one.j.answer(urgent, a)
+  await one.clock.advance(0)
+  await one.clock.advance(2 * 24 * 3600000)
+  const key = J.cacheKey('Is this urgent?', 'bronos.gmail', 'm1')
+  // another window answered the item's next rev meanwhile
+  await shared.set(key, { rev: 'r2', score: 0.2, at: one.clock.now(), seen: one.clock.now() })
+  assert.deepEqual(one.j.answer(urgent, a), { score: 0.9 }, 'this window still lists r1')
+  await flush()
+  assert.equal(shared.map.get(key).rev, 'r2', 'not overwritten')
+  assert.deepEqual(one.j.answer(urgent, { ...a, rev: 'r2' }), { score: 0.2 }, 'and this window takes it up')
+  assert.equal(one.jev.calls.length, 1)
+})
+
+test('the cache writes of one batch run in parallel, onAnswer after all of them', async () => {
+  const store = fakeAppStorage()
+  const realSet = store.set
+  let started = 0
+  const gates = []
+  store.set = (k, v) => {
+    started++
+    return new Promise((r) => gates.push(r)).then(() => realSet(k, v))
+  }
+  const { clock, answered, j } = setup({ store })
+  for (let i = 0; i < 5; i++) j.answer(urgent, it('bronos.gmail', `m${i}`))
+  await clock.advance(0)
+  assert.equal(started, 5, 'all five writes started before any finished')
+  assert.equal(answered.length, 0)
+  for (const g of gates) g()
+  await flush()
+  assert.equal(answered.length, 1)
+  assert.equal(answered[0].length, 5)
+})

@@ -223,9 +223,12 @@ characters), asked through `ctx.services.use('jev')` `grid(...)`:
 - **While an answer is pending**, evaluation goes on past the rule as if it did not hold, and the row shows "Jev…"; when
   the answer comes, the item moves at most once, and then stays (cached). That is the only time an item moves without
   a new event or a rules edit.
-- **Jev unavailable** (no provider, its cap reached, an error): the rule is treated as not holding, nothing is cached,
-  the row's reason says "rule 3 skipped: Jev unavailable", and the question is asked again after 10 minutes. The
-  settings page shows a Jev rule as inactive when no `jev` provider is enabled.
+- **Jev unavailable** (no provider, its cap reached, an error, no answer in 45 s): the rule is treated as not holding,
+  nothing is cached, the row's reason says "rule 3 skipped: Jev unavailable", and the question is asked again after 10
+  minutes (the item is re-placed then; with no provider, within a minute of one appearing). The settings page shows a
+  Jev rule as inactive when no `jev` provider is enabled.
+- A placement of every item runs inside `sweep`: requests still queued for items that left the feed or for a question
+  edited or deleted are dropped, never asked. A question's queue holds at most 2000 requests.
 - Two windows may each ask once for the same item before either has written the cache; the cost is a duplicate
   request, not a different order (both write the same kind of answer; the last write wins).
 
