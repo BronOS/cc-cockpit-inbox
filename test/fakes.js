@@ -84,6 +84,71 @@ function fakeFeed(describe, items = [], opts = {}) {
   return feed
 }
 
+/** A v2 FeedItem (design-v2 "The item") as a provider emits it. */
+function item2(id, o = {}) {
+  return {
+    id,
+    rev: o.rev || `${id}-r1`,
+    title: o.title || `Item ${id}`,
+    time: o.time === undefined ? NOW - HOUR : o.time,
+    read: o.read === undefined ? false : o.read,
+    actions: o.actions || [{ id: 'open', label: 'Open' }],
+    ...(o.preview !== undefined ? { preview: o.preview } : {}),
+    ...(o.labels !== undefined ? { labels: o.labels } : {}),
+    ...(o.extra || {}),
+  }
+}
+
+/**
+ * A fake `inbox-feed` v2 provider: `snapshot()` answers `{ items: feed.items, state, message, asOf }`.
+ * `feed.hold()` makes the next snapshot wait until the returned `release()` is called, answering what
+ * `feed.items` held when the snapshot was asked (a snapshot that resolves late, after newer events).
+ * `feed.throwOn` = 'snapshot' | 'describe' makes that call reject.
+ */
+function fakeFeedV2(describe, items = [], opts = {}) {
+  const feed = {
+    items,
+    state: 'ok',
+    message: undefined,
+    calls: [],
+    throwOn: null,
+    held: null,
+    hold() {
+      let release
+      const gate = new Promise((r) => (release = r))
+      feed.held = gate
+      return () => release()
+    },
+    impl: {
+      async describe() {
+        feed.calls.push(['describe'])
+        if (feed.throwOn === 'describe') throw new Error('describe broke')
+        return describe
+      },
+      async features() {
+        feed.calls.push(['features'])
+        return opts.features || []
+      },
+      async snapshot() {
+        feed.calls.push(['snapshot'])
+        if (feed.throwOn === 'snapshot') throw new Error('snapshot broke')
+        const answer = { items: structuredClone(feed.items), state: feed.state, asOf: NOW, ...(feed.message ? { message: feed.message } : {}) }
+        if (feed.held) {
+          const gate = feed.held
+          feed.held = null
+          await gate
+        }
+        return answer
+      },
+      async act(id, action) {
+        feed.calls.push(['act', id, action])
+        return { ok: true }
+      },
+    },
+  }
+  return feed
+}
+
 const CHAT = { label: 'Chat', badge: 'CHAT', color: 'green', kind: 'chat' }
 const MAIL = { label: 'Mail', badge: 'MAIL', color: 'red', kind: 'mail' }
 const JIRA = { label: 'Jira', badge: 'JIRA', color: 'blue', kind: 'issues' }
@@ -309,4 +374,4 @@ function fakeCtx(opts = {}) {
 /** Let queued microtasks and promise continuations run. */
 const flush = () => new Promise((r) => setImmediate(r))
 
-module.exports = { NOW, HOUR, item, fakeFeed, fakeCalendar, fakeAppStorage, fakeCtx, flush, CHAT, MAIL, JIRA }
+module.exports = { NOW, HOUR, item, item2, fakeFeed, fakeFeedV2, fakeCalendar, fakeAppStorage, fakeCtx, flush, CHAT, MAIL, JIRA }
