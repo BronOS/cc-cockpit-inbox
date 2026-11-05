@@ -23,7 +23,8 @@
         "name": "inbox",
         "summary": "Inbox: the list by your rules, open, act, mark done, undo, why, snooze; read and edit the rules and groups",
         "usage": "inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | rules [list|export|import|add|set|rm|move|enable|disable|test] [--global|--project] | groups [list|add|rename|rm|move] | help; ccc inbox help for details",
-        "stdin": true
+        "stdin": true,
+        "stdinDash": true
       }
     ],
     "skills": [

@@ -33,7 +33,7 @@ const MAX_EXPORT = 250 * 1024
 const TEST_LIST = 20
 
 const SCOPES = Object.freeze({ '--global': 'global', '--project': 'project' })
-const USAGE_RULES = 'ccc inbox rules [list|export|import|add <json|->|set <n> <json|->|rm <n>|move <n> <to>|enable <n>|disable <n>|test <json|-|n>] [--global|--project] [--at <n>]'
+const USAGE_RULES = 'ccc inbox rules [list|export|import -|add <json|->|set <n> <json|->|rm <n>|move <n> <to>|enable <n>|disable <n>|test <json|-|n>] [--global|--project] [--at <n>]'
 const USAGE_GROUPS = 'ccc inbox groups [list|add <name> [--badge] [--collapsed] [--at <n>]|rename <id|n> <name>|rm <id|n>|move <id|n> <to>] [--global|--project]'
 
 // What each subcommand takes: its positional words (`n`: a position, `ref`: a group id or position,
@@ -42,6 +42,8 @@ const SUBS = Object.freeze({
   rules: {
     list: { args: [], flags: [] },
     export: { args: [], flags: [] },
+    // `-` is required: the app reads stdin only for a `-` argument (`stdinDash`), so a bare `import`
+    // would see no input and say so wrongly.
     import: { args: [], optional: ['-'], flags: [] },
     add: { args: ['json'], flags: ['--at'] },
     set: { args: ['n', 'json'], flags: [] },
@@ -99,7 +101,7 @@ function parse(argv) {
   for (const f of flags) if (!spec.flags.includes(f)) return usage(`${cmd} ${p.sub} takes no ${f}`)
   const what = `${cmd} ${p.sub}`
   if (spec.optional) {
-    if (p.args.length > spec.optional.length || p.args.some((a, i) => a !== spec.optional[i])) return usage(`${what} reads the JSON from stdin and takes no other argument`)
+    if (p.args.length !== spec.optional.length || p.args.some((a, i) => a !== spec.optional[i])) return usage(`${what} reads the JSON from stdin: pass - and pipe it in (… | ccc inbox ${what} -)`)
     p.args = []
     return p
   }

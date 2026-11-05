@@ -34,7 +34,7 @@ own set, and is refused when the project has none (it gets one only in Settings 
 
   ccc inbox rules [--global|--project]          the set: groups (n, name, id, flags), numbered rules (on/off, what each checks → group, id), agenda
   ccc inbox rules export                        the whole set as JSON on stdout
-  ccc inbox rules import                        replace the whole set with JSON read from stdin
+  ccc inbox rules import -                      replace the whole set with JSON read from stdin
   ccc inbox rules add <json|-> [--at <n>]       add one rule; default place: after the leading rules that go to Rest, before the first that goes elsewhere
   ccc inbox rules set <n> <json|->              replace rule n (its id and on/off are kept when the JSON has none)
   ccc inbox rules rm <n>                        remove rule n

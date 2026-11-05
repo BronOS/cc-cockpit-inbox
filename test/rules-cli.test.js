@@ -105,7 +105,7 @@ test('scope: --project in a project on the global rules is refused, for a read a
   const ctx = setup()
   const inbox = await start(ctx)
   const refusal = 'This project uses the global rules; make it its own in Settings › This Project, or use --global.\n'
-  for (const argv of [['rules'], ['rules', 'export'], ['rules', 'add', lead()], ['rules', 'disable', '1'], ['groups', 'add', 'X'], ['rules', 'test', '1'], ['rules', 'import']]) {
+  for (const argv of [['rules'], ['rules', 'export'], ['rules', 'add', lead()], ['rules', 'disable', '1'], ['groups', 'add', 'X'], ['rules', 'test', '1'], ['rules', 'import', '-']]) {
     const r = await ctx.runCli([...argv, '--project'], JSON.stringify(S.defaults()))
     assert.deepEqual(r, { stderr: refusal, code: 1 }, argv.join(' '))
   }
@@ -248,7 +248,7 @@ test('export and import: a round trip stores the same set; missing ids are minte
   const inbox = await start(ctx)
   const out = (await ctx.runCli(['rules', 'export'])).stdout
   assert.deepEqual(JSON.parse(out), ownSet())
-  let r = await ctx.runCli(['rules', 'import'], out)
+  let r = await ctx.runCli(['rules', 'import', '-'], out)
   assert.equal(r.stdout, "Imported: 6 groups, 7 rules, agenda top\nSaved to this project's rules; applied now.\n")
   assert.deepEqual(await ctx.storage.get(S.KEY), ownSet())
   assert.equal((await ctx.runCli(['rules', 'export', '--project'])).stdout, out)
@@ -268,19 +268,21 @@ test('import: a set with any problem, not JSON or nothing on stdin stores nothin
   const inbox = await start(ctx)
   const d = S.defaults()
   const bad = { ...d, rules: [...d.rules, { group: 'now', when: [{ field: 'labels', op: 'has', value: 'a' }, { field: 'to', op: 'in', value: ['direct', 'dm'] }] }] }
-  assert.deepEqual(await ctx.runCli(['rules', 'import'], JSON.stringify(bad)), {
+  assert.deepEqual(await ctx.runCli(['rules', 'import', '-'], JSON.stringify(bad)), {
     stderr: 'Nothing stored: rules[6].when[1].value: rule 7, condition 2: to in needs a list of 1 to 50 values, each one of direct, group, cc, none\n',
     code: 1,
   })
-  assert.deepEqual(await ctx.runCli(['rules', 'import'], JSON.stringify({ ...d, version: undefined })), { stderr: 'Nothing stored: version: these are not Inbox v2 settings (version 2)\n', code: 1 })
-  assert.deepEqual(await ctx.runCli(['rules', 'import'], JSON.stringify({ ...d, groups: d.groups.slice(0, 4) })), { stderr: 'Nothing stored: groups: the Rest group is missing\n', code: 1 })
-  let r = await ctx.runCli(['rules', 'import'], '{"version": 2,')
+  assert.deepEqual(await ctx.runCli(['rules', 'import', '-'], JSON.stringify({ ...d, version: undefined })), { stderr: 'Nothing stored: version: these are not Inbox v2 settings (version 2)\n', code: 1 })
+  assert.deepEqual(await ctx.runCli(['rules', 'import', '-'], JSON.stringify({ ...d, groups: d.groups.slice(0, 4) })), { stderr: 'Nothing stored: groups: the Rest group is missing\n', code: 1 })
+  let r = await ctx.runCli(['rules', 'import', '-'], '{"version": 2,')
   assert.equal(r.code, 1)
   assert.match(r.stderr, /^rules import: the set is not JSON: /)
-  r = await ctx.runCli(['rules', 'import'], '')
+  r = await ctx.runCli(['rules', 'import', '-'], '')
   assert.match(r.stderr, /^rules import: no set on stdin/)
   assert.equal(await ctx.appStorage.get(S.KEY), undefined)
-  assert.deepEqual(await ctx.runCli(['rules', 'import', 'file.json']), { stderr: `rules import reads the JSON from stdin and takes no other argument\nUsage: ${RC.USAGE_RULES}\n(ccc inbox help for details)\n`, code: 2 })
+  const bare = `rules import reads the JSON from stdin: pass - and pipe it in (… | ccc inbox rules import -)\nUsage: ${RC.USAGE_RULES}\n(ccc inbox help for details)\n`
+  assert.deepEqual(await ctx.runCli(['rules', 'import', 'file.json']), { stderr: bare, code: 2 })
+  assert.deepEqual(await ctx.runCli(['rules', 'import'], JSON.stringify(d)), { stderr: bare, code: 2 })
   inbox.dispose()
 })
 

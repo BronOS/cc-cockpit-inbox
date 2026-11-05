@@ -337,7 +337,7 @@ read and edit the same sets with the same check and the same save:
   here", or "this project's rules"), the groups (position, name, id, flags), the numbered rules (on/off, the conditions
   as `why` phrases them, `Jev "<question>" >= <min>`, → group, id) and the agenda. `groups [list]` is the same text.
 - `rules export` prints the set as JSON (pretty when it fits the 256 KiB output limit, else compact, else refused:
-  never a cut JSON text). `rules import` replaces the whole set with JSON read from stdin.
+  never a cut JSON text). `rules import -` replaces the whole set with JSON read from stdin.
 - Small edits: `rules add <json|-> [--at <n>]`, `set <n> <json|->` (the old id and on/off kept when the JSON has
   none), `rm <n>`, `move <n> <to>`, `enable <n>`, `disable <n>`; `groups add <name> [--badge] [--collapsed] [--at <n>]`
   (default just before Rest), `rename <id|n> <name>`, `rm <id|n>` (its rules go to Rest), `move <id|n> <to>`. Rest

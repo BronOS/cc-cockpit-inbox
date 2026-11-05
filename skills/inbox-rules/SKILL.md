@@ -47,7 +47,7 @@ This Project, by turning off "Use the global rules"); the commands never create 
 ```
 ccc inbox rules [--global|--project]          groups, numbered rules, agenda
 ccc inbox rules export                        the whole set as JSON
-ccc inbox rules import                        replace the whole set with JSON from stdin
+ccc inbox rules import -                      replace the whole set with JSON from stdin
 ccc inbox rules add <json|-> [--at <n>]       add one rule
 ccc inbox rules set <n> <json|->              replace rule n (keeps its id and on/off when the JSON has none)
 ccc inbox rules rm <n>                        remove rule n
@@ -67,8 +67,9 @@ Every command takes `--global` or `--project`. Numbers are the positions `ccc in
 (1 is the first; disabled rules count). A group is named by its id or its position.
 
 - Quote the JSON as one shell argument (single quotes), or pass `-` and pipe it on stdin:
-  `echo '{"group":"now","when":[...]}' | ccc inbox rules add -`. `rules import` always reads stdin:
-  `ccc inbox rules export > /tmp/inbox.json`, edit, then `ccc inbox rules import < /tmp/inbox.json`.
+  `echo '{"group":"now","when":[...]}' | ccc inbox rules add -`. `rules import -` reads stdin:
+  `ccc inbox rules export > /tmp/inbox.json`, edit, then `ccc inbox rules import - < /tmp/inbox.json`.
+  stdin is read only for a `-` argument, so the other commands never wait on it.
 - `rules add` without `--at` puts the rule after the leading rules that go to Rest (filters such as
   the default `read is true → Rest`) and before the first rule that goes to any other group; at the
   end when every rule goes to Rest. Use `--at` when the rule belongs elsewhere.
