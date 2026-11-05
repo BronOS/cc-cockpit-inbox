@@ -72,6 +72,8 @@ const isEntry = (v) =>
 function createState(store) {
   /** rank key -> entry, as of the last load (plus this window's own writes). */
   let entries = new Map()
+  /** The undo token of this window's last Done. */
+  let lastDone = null
 
   async function load() {
     const keys = (await store.keys()).filter((k) => k.startsWith(PREFIX))
@@ -121,7 +123,8 @@ function createState(store) {
   async function done(row, now) {
     const prev = entries.get(rankKey(row.pluginId, row.id)) || null
     await write({ pluginId: row.pluginId, id: row.id, title: row.title, badge: row.badge, kind: 'done', rev: row.rev, at: now, seen: now })
-    return { pluginId: row.pluginId, id: row.id, prev }
+    lastDone = { pluginId: row.pluginId, id: row.id, prev }
+    return lastDone
   }
 
   /** Snooze a row until `until` (ms) or until it changes (`until` null). Returns the undo token. */
@@ -129,6 +132,42 @@ function createState(store) {
     const prev = entries.get(rankKey(row.pluginId, row.id)) || null
     await write({ pluginId: row.pluginId, id: row.id, title: row.title, badge: row.badge, kind: 'snooze', rev: row.rev, at: now, until: until ?? null, seen: now })
     return { pluginId: row.pluginId, id: row.id, prev }
+  }
+
+  // --- v2 (design-v2 "Inbox's own memory"): rules place items, so there is no score to lift. ---
+
+  /**
+   * Hidden or back for a live item (feed v2 shape: `source`, `id`, `rev`). Done hides it while the
+   * `rev` is the stored one; a different rev returns it as "back" (a read or label change leaves the
+   * rev alone, so it does not). A snooze hides until its time or a rev change; once woken the item
+   * is placed by the rules like any other, marked "back". `doneReturns: false` keeps done hidden.
+   */
+  function status(item, now, { doneReturns = true } = {}) {
+    const j = judge(entries.get(rankKey(item.source, item.id)), item, now, 0, doneReturns)
+    return { hidden: j.hidden, back: j.back || (j.extra === 0 && !j.hidden && entries.has(rankKey(item.source, item.id))) }
+  }
+
+  /**
+   * The Done view: done entries newest first, each with the live title when the item is still in
+   * `liveByKey` (a Map of rank key -> feed item), else the stored one.
+   */
+  function doneList(liveByKey = new Map()) {
+    return [...entries.values()]
+      .filter((e) => e.kind === 'done')
+      .sort((a, b) => b.at - a.at)
+      .map((e) => {
+        const live = liveByKey.get(rankKey(e.pluginId, e.id))
+        return { pluginId: e.pluginId, id: e.id, title: (live && live.title) || e.title || '', at: e.at, live: Boolean(live) }
+      })
+  }
+
+  /** Take back the last Done of this window ("u", the toast); returns whether there was one. */
+  async function undoLastDone() {
+    if (!lastDone) return false
+    const token = lastDone
+    lastDone = null
+    await undo(token)
+    return true
   }
 
   /** Put an item back in the inbox (the "Back to inbox" button, opening a "back" item). */
@@ -176,7 +215,7 @@ function createState(store) {
       .sort((a, b) => b.at - a.at)
   }
 
-  return { load, view, done, snooze, restore, undo, woken, markNotified, touch, prune, today, entries: () => entries }
+  return { load, view, status, doneList, undoLastDone, done, snooze, restore, undo, woken, markNotified, touch, prune, today, entries: () => entries }
 }
 
 module.exports = { createState, storageKey, untilOf, startOfDay, rankKey, KEEP_MS }

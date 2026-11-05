@@ -137,3 +137,67 @@ test('snooze times: 1 h, afternoon (today or tomorrow), tomorrow morning across 
   assert.equal(untilOf('changes', NOW), null)
   assert.throws(() => untilOf('never', NOW), /unknown snooze/)
 })
+
+// --- v2 ---
+const v2 = (id, rev = 'r1', source = 'bronos.mail', title = `T ${id}`) => ({ source, id, rev, title })
+
+test('v2 status: done returns on a new rev only, a read or label change does not', async () => {
+  const st = createState(fakeAppStorage())
+  await st.done(row('a'), NOW)
+  assert.deepEqual(st.status(v2('a'), NOW), { hidden: true, back: false })
+  assert.deepEqual(st.status({ ...v2('a'), read: true, labels: ['x'] }, NOW), { hidden: true, back: false })
+  assert.deepEqual(st.status(v2('a', 'r2'), NOW), { hidden: false, back: true })
+  assert.deepEqual(st.status(v2('a', 'r2'), NOW, { doneReturns: false }), { hidden: true, back: false })
+  assert.deepEqual(st.status(v2('other'), NOW), { hidden: false, back: false })
+})
+
+test('v2 status: a woken snooze is placed by the rules, marked back', async () => {
+  const st = createState(fakeAppStorage())
+  await st.snooze(row('a'), NOW + HOUR, NOW)
+  assert.deepEqual(st.status(v2('a'), NOW + MIN), { hidden: true, back: false })
+  assert.deepEqual(st.status(v2('a'), NOW + HOUR), { hidden: false, back: true })
+})
+
+test('v2 entry shape and v1 entries carried over', async () => {
+  const store = fakeAppStorage()
+  // A v1 entry as the 0.1.0 host wrote it (same key form, extra fields ignored).
+  await store.set('st:bronos.mail:old', { pluginId: 'bronos.mail', id: 'old', title: 'Old', badge: 'MAIL', kind: 'done', rev: 'r1', at: NOW, seen: NOW })
+  const st = createState(store)
+  await st.done(row('new'), NOW + 1)
+  await st.load()
+  assert.equal(st.status(v2('old', 'r1'), NOW).hidden, true)
+  assert.equal(st.status(v2('old', 'r2'), NOW).back, true)
+  const e = await store.get('st:bronos.mail:new')
+  assert.deepEqual([e.kind, e.rev, e.at, e.title, e.pluginId, e.id], ['done', 'r1', NOW + 1, 'T new', 'bronos.mail', 'new'])
+})
+
+test('undoLastDone takes back only the last Done; none left returns false', async () => {
+  const st = createState(fakeAppStorage())
+  assert.equal(await st.undoLastDone(), false)
+  await st.done(row('a'), NOW)
+  await st.done(row('b'), NOW + 1)
+  assert.equal(await st.undoLastDone(), true)
+  assert.equal(st.status(v2('b'), NOW).hidden, false)
+  assert.equal(st.status(v2('a'), NOW).hidden, true)
+  assert.equal(await st.undoLastDone(), false)
+})
+
+test('Done view: newest first, live title else stored, snoozes left out, Back to Inbox restores', async () => {
+  const st = createState(fakeAppStorage())
+  await st.done(row('a'), NOW - 2 * HOUR)
+  await st.done(row('b'), NOW - HOUR)
+  await st.snooze(row('s'), null, NOW)
+  const live = new Map([[rankKey('bronos.mail', 'a'), v2('a', 'r1', 'bronos.mail', 'Live A')]])
+  assert.deepEqual(st.doneList(live).map((d) => [d.id, d.title, d.live]), [['b', 'T b', false], ['a', 'Live A', true]])
+  await st.restore('bronos.mail', 'b')
+  assert.deepEqual(st.doneList(live).map((d) => d.id), ['a'])
+})
+
+test('a gone item keeps its Done entry until pruned; it stays done on return with the same rev', async () => {
+  const st = createState(fakeAppStorage())
+  await st.done(row('a'), NOW)
+  await st.prune(NOW + 13 * 24 * HOUR)
+  assert.equal(st.status(v2('a'), NOW).hidden, true)
+  await st.prune(NOW + 15 * 24 * HOUR)
+  assert.equal(st.status(v2('a'), NOW).hidden, false)
+})
