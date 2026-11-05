@@ -1,7 +1,8 @@
 'use strict'
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createInbox } = require('../dist/host')
+const host = require('../dist/host')
+const { createInbox } = host
 const S = require('../dist/lib/settings')
 const { fakeCtx, fakeFeedV2, fakeJev, fakeAppStorage, item2, flush, NOW, HOUR, CHAT, MAIL, JIRA } = require('./fakes')
 
@@ -404,4 +405,91 @@ test('no sources: empty groups, no badge, and the CLI says so', async () => {
   assert.equal(ctx.badges.at(-1), null)
   assert.equal((await ctx.runCli([])).stdout, 'Inbox zero.\n')
   inbox.dispose()
+})
+
+test('two windows: a done in one shows in the other when its panel becomes visible', async () => {
+  const store = fakeAppStorage()
+  const w1 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1'), item2('m2')]) } })
+  const w2 = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1'), item2('m2')]) } })
+  await Promise.all([w1.inbox.first, w2.inbox.first])
+  await settle()
+  await w1.ctx.sendPanel({ type: 'done', key: rowOf(w1.ctx, 'm1').key })
+  await w1.ctx.sendPanel({ type: 'snooze', key: rowOf(w1.ctx, 'm2').key, choice: '1h' })
+  assert.deepEqual(groups(w1.ctx), {})
+  assert.deepEqual(groups(w2.ctx), { mail: ['m1', 'm2'] }, 'not yet: the other window reads on hello, visible and tick')
+  await w2.ctx.sendPanel({ type: 'visible' })
+  await settle()
+  assert.deepEqual(groups(w2.ctx), {})
+  w1.inbox.dispose()
+  w2.inbox.dispose()
+})
+
+test('an action that hangs fails at the call limit and never holds the other sources', async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') })])
+  const chat = chatFeed([item2('c1')])
+  mail.impl.act = () => new Promise(() => {})
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail, 'bronos.chat': chat }, callMs: 30 })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'act', key: rowOf(ctx, 'm1').key, action: 'markRead' })
+  assert.match(ctx.posts.at(-1).text, /failed: Mail markRead did not answer/)
+  await ctx.sendPanel({ type: 'open', key: rowOf(ctx, 'c1').key })
+  assert.deepEqual(sourceCalls(chat), [['act', 'c1', 'open']])
+  inbox.dispose()
+})
+
+test('same item id in two sources: each action goes to its own source', async () => {
+  const mail = mailFeed([item2('x1', { actions: actions('open', 'markRead') })])
+  const chat = chatFeed([item2('x1', { actions: actions('open', 'markRead') })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail, 'bronos.chat': chat } })
+  await inbox.first
+  await settle()
+  const rows = ctx.lastState().groups.flatMap((g) => g.rows).filter((r) => r.id === 'x1')
+  assert.equal(rows.length, 2)
+  assert.notEqual(rows[0].key, rows[1].key)
+  const mailRow = rows.find((r) => r.badge === 'MAIL')
+  await ctx.sendPanel({ type: 'act', key: mailRow.key, action: 'markRead' })
+  assert.deepEqual(sourceCalls(mail), [['act', 'x1', 'markRead']])
+  assert.deepEqual(sourceCalls(chat), [])
+  await ctx.sendPanel({ type: 'done', key: mailRow.key })
+  assert.deepEqual(rows.filter((r) => r.badge === 'CHAT').map((r) => rowOf(ctx, r.id).badge), ['CHAT'], 'the chat item stays')
+  inbox.dispose()
+})
+
+test('opening a back item ends its mark only when the source opened it', async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open') })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  await ctx.sendPanel({ type: 'done', key: rowOf(ctx, 'm1').key })
+  ctx.emitFeed('bronos.mail', 'item', item2('m1', { rev: 'm1-r2', actions: actions('open') }))
+  await settle()
+  assert.equal(rowOf(ctx, 'm1').back, true)
+  mail.actReply = { ok: false, message: 'no' }
+  await ctx.sendPanel({ type: 'open', key: rowOf(ctx, 'm1').key })
+  await settle()
+  assert.equal(rowOf(ctx, 'm1').back, true, 'a failed open keeps the mark')
+  mail.actReply = { ok: true }
+  await ctx.sendPanel({ type: 'open', key: rowOf(ctx, 'm1').key })
+  await settle()
+  assert.notEqual(rowOf(ctx, 'm1').back, true)
+  inbox.dispose()
+})
+
+test('dispose removes every listener, provider, timer, command and subscription; exports.deactivate disposes', async () => {
+  const idle = fakeCtx().live()
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await inbox.first
+  const live = ctx.live()
+  assert.ok(live.panel > 0 && live.overlay > 0 && live.timers > 0 && live.cli && live.feed > 0, JSON.stringify(live))
+  inbox.dispose()
+  assert.deepEqual(ctx.live(), { ...idle, feed: 0 })
+
+  const c2 = fakeCtx()
+  c2.addProvider('bronos.mail', mailFeed([item2('m1')]))
+  host.activate(c2)
+  assert.ok(c2.live().cli)
+  host.deactivate()
+  assert.deepEqual(c2.live(), { ...idle, feed: 0 })
+  host.deactivate()
 })

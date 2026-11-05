@@ -115,6 +115,7 @@ function fakeServices(ctx, opts) {
       for (const fn of changeListeners) fn()
     })
   }
+  ctx.feedListenerCount = () => eventListeners.length + changeListeners.length
   ctx.addProvider = (pluginId, feed) => {
     providers.set(pluginId, feed)
     changed()
@@ -260,12 +261,12 @@ function fakeCtx(opts = {}) {
       },
       onMessage: (panel, fn) => {
         panelListeners.push(fn)
-        return () => {}
+        return () => panelListeners.splice(panelListeners.indexOf(fn), 1)
       },
       header: (panel, spec) => ctx.headers.push(structuredClone(spec)),
       onAction: (panel, fn) => {
         actionListeners.push(fn)
-        return () => {}
+        return () => actionListeners.splice(actionListeners.indexOf(fn), 1)
       },
       slots: (panel, placements) => ctx.slotPlacements.push(structuredClone(placements)),
       show() {},
@@ -301,11 +302,24 @@ function fakeCtx(opts = {}) {
       register: (name, fn) => {
         ctx.cliName = name
         ctx.cliHandler = fn
-        return () => {}
+        return () => {
+          ctx.cliHandler = null
+        }
       },
     },
     async runCli(argv) {
       return ctx.cliHandler(argv, { stdin: '', cwd: '/tmp', signal: new AbortController().signal })
+    },
+    /** What a host still holds on this ctx: panel and action listeners, overlay providers, running timers, the CLI, feed subscriptions. */
+    live() {
+      return {
+        panel: panelListeners.length,
+        actions: actionListeners.length,
+        overlay: ctx.overlayButtons.size,
+        timers: ctx.schedules.filter((s) => !s.stopped).length,
+        cli: Boolean(ctx.cliHandler),
+        feed: ctx.feedListenerCount(),
+      }
     },
     lastState() {
       return [...ctx.posts].reverse().find((m) => m.type === 'state')

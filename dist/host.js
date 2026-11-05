@@ -507,8 +507,10 @@ function createInbox(ctx, opts = {}) {
     if (!handle) return { ok: false, label: a.label, message: `${label} is no longer a source` }
     // Opening a "back" item or a woken snooze ends that mark (it was seen); a hidden one (opened from
     // the Done view or a search) stays done.
-    if (action === 'open' && !state.status(it, now()).hidden) await state.restore(it.source, it.id)
+    // Decided before the act but applied after a successful one, so a failed or timed-out open keeps the mark.
+    const endsMark = action === 'open' && !state.status(it, now()).hidden
     const reply = actReplyOf(await call(handle.act(it.id, action), `${label} ${action}`))
+    if (endsMark && reply.ok) await state.restore(it.source, it.id)
     if (action === 'open') schedulePublish()
     return { ...reply, label: a.label }
   }
