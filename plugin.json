@@ -21,8 +21,8 @@
     "cli": [
       {
         "name": "inbox",
-        "summary": "Inbox: the list by your rules, open, mark done or snooze an item",
-        "usage": "inbox [list] | open <n|ref> | done <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | help"
+        "summary": "Inbox: the list by your rules, open, act, mark done, undo, why, snooze",
+        "usage": "inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | help"
       }
     ],
     "settings": {

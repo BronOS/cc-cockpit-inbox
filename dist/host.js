@@ -32,7 +32,7 @@ const { actReplyOf } = require('./lib/feed')
 const { createSources } = require('./lib/sources')
 const { createJev } = require('./lib/jev')
 const { createState, untilOf } = require('./lib/state')
-const { placeItem, checkRule, keyOf, byTime, REST, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./lib/rules')
+const { placeItem, traceItem, checkRule, keyOf, byTime, REST, FIELDS, KINDS, TO, MAX_IN, MAX_VALUE, MAX_MINUTES } = require('./lib/rules')
 const { search } = require('./lib/search')
 const S = require('./lib/settings')
 const CLI = require('./lib/cli')
@@ -756,13 +756,15 @@ function createInbox(ctx, opts = {}) {
     ctx.log.error(`first read: ${why(e)}`)
   })
 
-  // ---- `ccc inbox` (lib/cli.js; its v2 commands come with task 32) ----
+  // ---- `ccc inbox` (lib/cli.js) ----
 
-  /** The list as `ccc inbox` numbers it: every group in order, the group's name in the level column. */
+  /** The list as `ccc inbox` numbers it: every group in order, with the rule that placed each row. */
   function cliRows() {
     const out = []
     for (const g of view.groups) {
-      for (const r of g.rows) out.push({ key: r.key, pluginId: r.item.source, id: r.item.id, title: r.item.title, badge: descOf(r.item.source).badge, level: g.name, at: r.item.time })
+      for (const r of g.rows) {
+        out.push({ key: r.key, item: r.item, pluginId: r.item.source, id: r.item.id, title: r.item.title, badge: descOf(r.item.source).badge, group: g.name, groupId: g.id, reason: r.placement.reason, at: r.item.time })
+      }
     }
     return out
   }
@@ -779,11 +781,33 @@ function createInbox(ctx, opts = {}) {
       build(now())
       const rows = cliRows()
       if (p.cmd === 'list') return { stdout: CLI.formatList(rows, now()) }
+      if (p.cmd === 'undo') {
+        // Same window as the panel's toast: after it the entry is not offered any more.
+        if (!lastUndo || now() >= lastUndo.until) return { stderr: 'Nothing to undo (undo lasts 6 seconds after a done or snooze).\n', code: 1 }
+        const { label } = lastUndo
+        try {
+          await act({ type: 'undo' })
+        } catch (e) {
+          return { stderr: `undo failed: ${why(e)}\n`, code: 1 }
+        }
+        return { stdout: `Undone: ${CLI.oneLine(label, CLI.MAX_TITLE + 20)}\n` }
+      }
       const got = CLI.resolve(rows, p.target)
       if (got.error) return { stderr: `${got.error}\n`, code: 1 }
       const row = got.row
       const title = CLI.oneLine(row.title, CLI.MAX_TITLE)
+      if (p.cmd === 'why') {
+        // The same pass as the row, from cached Jev answers only: asking is the sweep's job, not a read's.
+        const t = now()
+        const tr = traceItem(settings, row.item, { now: t, kindOf: (id) => descOf(id).kind, jevAnswer: jev.cachedAnswer })
+        return { stdout: CLI.formatWhy(row, tr.text) }
+      }
       try {
+        if (p.cmd === 'act') {
+          const reply = await runAction(row.key, p.action)
+          if (!reply.ok) return { stderr: `${CLI.oneLine(reply.label || p.action, 40)} failed: ${CLI.oneLine(reply.message || 'the source refused', 300)}\n`, code: 1 }
+          return { stdout: `${CLI.oneLine(reply.label || p.action, 40)}: ${title}\n` }
+        }
         if (p.cmd === 'open') {
           const reply = await runAction(row.key, 'open')
           if (!reply.ok) return { stderr: `open failed: ${CLI.oneLine(reply.message || 'the source refused', 300)}\n`, code: 1 }

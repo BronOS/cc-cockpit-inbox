@@ -1,6 +1,6 @@
 # Inbox v2 and the `inbox-feed` v2 contract
 
-Status: draft for review, 2026-11-04. Turns decisions 1-8 and 15 of cc-cockpit's
+Status: built as 0.2.0, 2026-11-04 (deviations at the end). Turns decisions 1-8 and 15 of cc-cockpit's
 `docs/feedback/20261104-real-work.md` into a design. The app features it builds on (slots, overlay types and
 buttons, the html settings page, the component stylesheet) are in cc-cockpit's `docs/design-next.md`. Where a
 decision left a detail open, the simplest choice is written in and repeated under Open questions. `docs/design.md`
@@ -391,3 +391,13 @@ All accepted as recommended (Oleg, 2026-11-04).
 10. "In the Inbox" marks in source panels (decision 15, optional): an `inbox` service with placements by id? Recommended: later.
 11. App: warn on the Plugins page when a provider's major differs from a collector's? Recommended: yes, in the same app release.
 12. At most 1000 items kept per source? Recommended: yes, with the over-cap count shown.
+
+## As built (0.2.0)
+
+- `ccc inbox`: `list` prints a header per non-empty group with its count, each row numbered across groups, and the
+  placing rule's reason on a line under it; at most 50 rows. `why` runs `traceItem` over the current settings with
+  cached Jev answers only (it never asks Jev), cut to 60 lines. `undo` honours the 6 s window of the panel's toast.
+  `act` checks the action id shape here and the item's list of actions in the host. `snooze` is as in v1.
+- Snooze keeps v1's fixed times (1 h, 14:00, 09:00, until it changes); the settings have no snooze fields.
+- The Read chip and `recent` are gone; the badge counts unread items in the groups marked `badge`.
+- The settings page edits a draft and saves it whole; the field table comes from the host.

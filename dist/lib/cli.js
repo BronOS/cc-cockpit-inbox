@@ -5,19 +5,26 @@
 
 const MAX_ROWS = 50
 const MAX_TITLE = 120
+const MAX_REASON = 240
 const CHOICES = ['1h', 'afternoon', 'tomorrow', 'changes']
 const CAL_REF = 'calendar'
 
+const ACTION_ID = /^[a-z][A-Za-z0-9-]{0,39}$/
+const MAX_TRACE_LINES = 60
+
 const HELP = `ccc inbox: the list of what needs you, in groups by your rules (bronos.inbox)
 
-  ccc inbox [list]                       the list, one line per item: number, badge, group, title, age, ref
+  ccc inbox [list]                       the groups, each row numbered, with its badge, title, age, ref and the rule that placed it
   ccc inbox open <n|ref>                 open the item in its own plugin (marks nothing done)
+  ccc inbox act <n|ref> <action>         run one of the item's own actions at its source (markRead, ...)
   ccc inbox done <n|ref>                 mark it done in Inbox (the source is not touched)
+  ccc inbox undo                         take back the last done or snooze (within 6 seconds)
+  ccc inbox why <n|ref>                  the full trace: each rule checked, and why it did not hold
   ccc inbox snooze <n|ref> <choice>      choice: 1h, afternoon, tomorrow or changes (until the item changes)
   ccc inbox help                         this text
 
 <n> is the number in the list as it stands now; <ref> is the stable reference printed at the end of each
-line (<pluginId>:<id>).
+row (<pluginId>:<id>).
 `
 
 /** One line, no control characters (C0, DEL, C1, line and paragraph separators), cut to \`max\`. */
@@ -41,23 +48,52 @@ function age(at, now) {
 
 const refOf = (row) => `${row.calendar ? CAL_REF : oneLine(row.pluginId, 80)}:${oneLine(row.id, 120)}`
 
+/**
+ * The list as the groups hold it: a header per non-empty group, then its numbered rows with the reason
+ * (the rule that placed the row) under each. Rows come in group order; the first MAX_ROWS are shown.
+ */
 function formatList(rows, now) {
   if (!rows.length) return 'Inbox zero.\n'
   const shown = rows.slice(0, MAX_ROWS)
   const out = [`Inbox: ${rows.length} item${rows.length === 1 ? '' : 's'}${rows.length > shown.length ? ` (first ${shown.length} shown)` : ''}`]
+  const totals = new Map()
+  for (const r of rows) totals.set(r.groupId, (totals.get(r.groupId) || 0) + 1)
+  let last = null
   shown.forEach((r, i) => {
-    out.push(`${i + 1}. [${oneLine(r.badge, 12)}] ${oneLine(r.level, 10) || '-'} ${oneLine(r.title, MAX_TITLE)} (${age(r.at, now)}) ${refOf(r)}`)
+    if (r.groupId !== last) {
+      last = r.groupId
+      out.push(`${oneLine(r.group, 40) || '-'} (${totals.get(r.groupId)})`)
+    }
+    out.push(`${i + 1}. [${oneLine(r.badge, 12)}] ${oneLine(r.title, MAX_TITLE)} (${age(r.at, now)}) ${refOf(r)}`)
+    if (r.reason) out.push(`     ${oneLine(r.reason, MAX_REASON)}`)
   })
   return `${out.join('\n')}\n`
 }
 
-/** @returns {{ cmd: string, target?: string, choice?: string } | { error: string }} */
+/** The trace for \`why\`: the item, then one bounded line per rule and the placement. */
+function formatWhy(row, traceText) {
+  const lines = String(traceText).split('\n')
+  const out = [`${oneLine(row.title, MAX_TITLE)} (${refOf(row)})`]
+  for (const l of lines.slice(0, MAX_TRACE_LINES)) out.push(oneLine(l, MAX_REASON))
+  if (lines.length > MAX_TRACE_LINES) out.push(`… ${lines.length - MAX_TRACE_LINES} more lines`)
+  return `${out.join('\n')}\n`
+}
+
+/** @returns {{ cmd: string, target?: string, choice?: string, action?: string } | { error: string }} */
 function parse(argv) {
   const [cmd = 'list', ...rest] = argv
-  const usage = (m) => ({ error: `${m}\nUsage: ccc inbox [list] | open <n|ref> | done <n|ref> | snooze <n|ref> ${CHOICES.join('|')} | help` })
+  const usage = (m) => ({ error: `${m}\nUsage: ccc inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> ${CHOICES.join('|')} | help` })
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return { cmd: 'help' }
   if (cmd === 'list') return rest.length ? usage('list takes no arguments') : { cmd }
-  if (cmd === 'open' || cmd === 'done') {
+  if (cmd === 'undo') return rest.length ? usage('undo takes no arguments') : { cmd }
+  if (cmd === 'act') {
+    if (!rest.length) return usage('act needs a number or a ref and an action id')
+    if (rest.length < 2) return usage('act needs an action id (the item\'s own, e.g. markRead)')
+    if (rest.length > 2) return usage('act takes a number or ref and one action id')
+    if (!ACTION_ID.test(rest[1])) return usage(`bad action id "${oneLine(rest[1], 40)}"`)
+    return { cmd, target: rest[0], action: rest[1] }
+  }
+  if (cmd === 'open' || cmd === 'done' || cmd === 'why') {
     if (!rest.length) return usage(`${cmd} needs a number or a ref (see ccc inbox)`)
     if (rest.length > 1) return usage(`${cmd} takes one number or ref`)
     return { cmd, target: rest[0] }
@@ -92,4 +128,4 @@ function when(t) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-module.exports = { HELP, CHOICES, MAX_ROWS, MAX_TITLE, oneLine, age, refOf, formatList, parse, resolve, when }
+module.exports = { HELP, CHOICES, MAX_ROWS, MAX_TITLE, oneLine, age, refOf, formatList, formatWhy, parse, resolve, when }
