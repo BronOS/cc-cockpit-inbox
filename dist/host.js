@@ -4,7 +4,8 @@
 //
 //   sources (lib/sources.js: snapshot, item / gone / sync events)
 //     → rules (lib/rules.js, Jev answers from lib/jev.js) → groups → one `state` message to the panel
-//   Done and snooze (lib/state.js), search (lib/search.js), settings (lib/settings.js), `ccc inbox` (lib/cli.js)
+//   Done and snooze (lib/state.js), search (lib/search.js), settings (lib/settings.js), `ccc inbox` (lib/cli.js;
+//   its `rules` and `groups` commands in lib/rulescli.js)
 //
 // Placement: an item keeps its placement until something about it changes, so the list does not move
 // under the person's hand. Rules re-run for one item when its source sends a new copy of it (`item`, or
@@ -23,7 +24,8 @@
 //
 // The settings page (settings/index.html, `ctx.settingsPage`) edits a draft and sends it whole: the
 // host checks every save with lib/settings.js `checkSettings` and refuses one that does not fit with
-// the reason, stores and applies one that does. App scope edits the global set (ctx.appStorage),
+// the reason, stores and applies one that does (`ccc inbox rules` and `groups` go through the same check
+// and the same save functions, so a Claude tab's edit is a page save). App scope edits the global set (ctx.appStorage),
 // project scope this project's own (ctx.storage) or switches it back to the global; the set in force
 // is the project's own when it has one (applyEffective). Done, snooze and the Jev answers stay app-wide. It also answers the page's "Test" of one rule over the
 // items it holds now, with cached Jev answers only (never a request). The page gets the settings, the
@@ -39,6 +41,7 @@ const { placeItem, traceItem, checkRule, byTime, REST, FIELDS, KINDS, TO, MAX_IN
 const { search } = require('./lib/search')
 const S = require('./lib/settings')
 const CLI = require('./lib/cli')
+const RC = require('./lib/rulescli')
 
 const PANEL = 'main'
 const FEED = 'inbox-feed'
@@ -818,11 +821,12 @@ function createInbox(ctx, opts = {}) {
    * One rule of a draft tried over the items Inbox shows now (Done and snoozed left out), with cached
    * Jev answers only: how many it would place where it stands (earlier rules take theirs first), how
    * many it holds for on its own, how many wait for a Jev answer, and five of the placed ones. A
-   * disabled rule is tried as if enabled. The draft is checked like a save first.
+   * disabled rule is tried as if enabled. The draft is checked like a save first. `opts` (for `ccc
+   * inbox rules test`): `examples`, how many to list, and `refs`, each example's source and id too.
    */
-  function testRule(raw, ruleId) {
+  function testRule(raw, ruleId, opts = {}) {
     const checked = S.checkSettings(raw)
-    if (!checked.ok) return { ok: false, reason: checked.reason }
+    if (!checked.ok) return { ok: false, reason: checked.reason, path: checked.path }
     const draft = checked.settings
     const idx = draft.rules.findIndex((r) => r.id === ruleId)
     if (idx < 0) return { ok: false, reason: 'that rule is not in the draft' }
@@ -854,9 +858,10 @@ function createInbox(ctx, opts = {}) {
       holds,
       pending,
       jev: Boolean(rule.jev) && jev.available(),
-      examples: placedRows.slice(0, TEST_EXAMPLES).map((r) => {
+      examples: placedRows.slice(0, opts.examples ?? TEST_EXAMPLES).map((r) => {
         const d = descOf(r.item.source)
-        return { title: cut(r.item.title, TEST_TITLE), label: d.label, badge: d.badge, color: d.color, reason: r.placement.reason }
+        const ref = opts.refs ? { source: r.item.source, id: r.item.id } : {}
+        return { title: cut(r.item.title, TEST_TITLE), label: d.label, badge: d.badge, color: d.color, reason: r.placement.reason, ...ref }
       }),
     }
   }
@@ -970,15 +975,83 @@ function createInbox(ctx, opts = {}) {
     return out
   }
 
+  /** Wait for the first read of the sources, within the CLI's deadline (it has per-call timeouts; this is the belt to them). */
+  async function firstRead() {
+    let timer
+    await Promise.race([first, new Promise((r) => (timer = setTimeout(r, opts.cliWaitMs ?? CLI_WAIT_MS)))])
+    clearTimeout(timer)
+  }
+
+  // `ccc inbox rules` and `groups` (lib/rulescli.js). One at a time in this window: each reads the stored
+  // set, edits it and saves it whole, and two at once (the app runs up to 4 calls of a plugin) would
+  // each save over the other's edit. Another window's page or CLI can still race one, exactly as two
+  // pages can: the last whole save wins.
+  let rulesChain = Promise.resolve()
+  const oneAtATime = (fn) => {
+    const run = rulesChain.then(fn, fn)
+    rulesChain = run.catch(() => {})
+    return run
+  }
+
+  /**
+   * One rules or groups command. The scope (design-v2 "CLI"): none is the set in effect in this window
+   * (this project's own set when it has one, else the global); `--global` the global set; `--project`
+   * this project's own set, refused when it has none (a set of its own is made only on the page, by
+   * turning off "Use the global rules": never implicitly). Every edit builds the next whole set, is
+   * checked by `checkSettings` and stored by `saveSettings` / `saveProjectSettings`, the page's own
+   * paths: applied in this window at once (every item placed again), read by the other windows on
+   * their next read, as a page save is.
+   */
+  async function rulesCommand(p, io) {
+    return oneAtATime(async () => {
+      // The stored sets, not this window's copy: another window may have saved since (the page does
+      // the same when it opens).
+      await readSettings()
+      const own = projectSettings !== null
+      if (p.scope === 'project' && !own) {
+        return { stderr: 'This project uses the global rules; make it its own in Settings › This Project, or use --global.\n', code: 1 }
+      }
+      const set = p.scope === 'global' || (p.scope === null && !own) ? 'global' : 'project'
+      const current = set === 'project' ? projectSettings : globalSettings
+      if (p.sub === 'list') return { stdout: RC.formatSet(current, set, own) }
+      if (p.sub === 'export') {
+        const e = RC.exportText(current)
+        return e.error ? { stderr: `export: ${e.error}\n`, code: 1 } : { stdout: e.stdout }
+      }
+      if (p.sub === 'test') {
+        const t = RC.testDraft(current, p, io.stdin)
+        if (t.error) return { stderr: `test: ${t.error}\n`, code: 1 }
+        await firstRead()
+        const result = testRule(t.draft, t.ruleId, { examples: RC.TEST_LIST, refs: true })
+        if (!result.ok) return { stderr: `test: ${result.path ? `${result.path}: ` : ''}${CLI.oneLine(result.reason, 300)}\n`, code: 1 }
+        return { stdout: RC.formatTest({ ...result, settings: S.readSettings(t.draft) }, t, set, own) }
+      }
+      const e = RC.edit(current, p, io.stdin)
+      if (e.error) return { stderr: `${p.cmd} ${p.sub}: ${e.error}\n`, code: 1 }
+      const checked = S.checkSettings(e.draft)
+      if (!checked.ok) return { stderr: `Nothing stored: ${checked.path ? `${checked.path}: ` : ''}${CLI.oneLine(checked.reason, 300)}\n`, code: 1 }
+      // Past the app's 30 s the caller has been told it failed (exit 124): do not store behind its back.
+      if (io.signal && io.signal.aborted) return { stderr: 'Nothing stored: the command was cancelled.\n', code: 1 }
+      const saved = set === 'global' ? await saveSettings(checked.settings) : await saveProjectSettings(checked.settings)
+      const where = set === 'global' ? (own ? 'the global rules (not in effect here: this project has its own set)' : 'the global rules') : "this project's rules"
+      return { stdout: `${CLI.oneLine(e.report(saved), 600)}\nSaved to ${where}; applied now.\n` }
+    })
+  }
+
   if (ctx.cli && typeof ctx.cli.register === 'function') {
-    const unregister = ctx.cli.register('inbox', async (argv) => {
-      const p = CLI.parse(argv)
+    const unregister = ctx.cli.register('inbox', async (argv, io = {}) => {
+      const rules = argv[0] === 'rules' || argv[0] === 'groups'
+      const p = rules ? RC.parse(argv) : CLI.parse(argv)
       if (p.error) return { stderr: `${p.error}\n`, code: 2 }
       if (p.cmd === 'help') return { stdout: CLI.HELP }
-      // The first read has per-call timeouts; this deadline is the belt to them.
-      let timer
-      await Promise.race([first, new Promise((r) => (timer = setTimeout(r, opts.cliWaitMs ?? CLI_WAIT_MS)))])
-      clearTimeout(timer)
+      if (rules) {
+        try {
+          return await rulesCommand(p, io)
+        } catch (e) {
+          return { stderr: `${p.cmd} ${p.sub} failed: ${CLI.oneLine(why(e), 300)}\n`, code: 1 }
+        }
+      }
+      await firstRead()
       build(now())
       const rows = cliRows()
       // The list names the set only when it is this project's own (the usual case says nothing new);

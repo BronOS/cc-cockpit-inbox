@@ -199,35 +199,35 @@ test('checkSettings: the defaults and the editor drafts pass; Rest is put last',
   assert.equal(got.settings.groups.at(-1).id, REST)
 })
 
-test('checkSettings: a refusal names what does not fit and where', () => {
+test('checkSettings: a refusal names what does not fit and where, by position and as a JSON path', () => {
   const d = S.defaults()
   const withRule = (r) => ({ ...d, rules: [...d.rules, { id: 'x', enabled: true, group: 'now', ...r }] })
   const cases = [
-    [null, 'the settings are not an object'],
-    [{ ...d, version: 1 }, 'these are not Inbox v2 settings (version 2)'],
-    [{ ...d, agenda: 'beside' }, 'the agenda must be top, bottom or off'],
-    [{ ...d, groups: 'x' }, 'the groups are not a list'],
-    [{ ...d, groups: d.groups.filter((g) => g.id !== REST) }, 'the Rest group is missing'],
-    [{ ...d, groups: [{ id: 'now', name: '  ' }, ...d.groups.slice(1)] }, 'group 1 needs a name of 1 to 40 characters'],
-    [{ ...d, groups: [d.groups[0], d.groups[0], ...d.groups.slice(1)] }, 'group 2: the id "now" is used twice'],
-    [{ ...d, groups: [{ id: '__proto__', name: 'X' }, ...d.groups] }, 'group 1 has a bad id'],
-    [{ ...d, groups: Array.from({ length: 21 }, (_, i) => ({ id: `g${i}`, name: 'G' })) }, 'at most 20 groups, Rest included'],
-    [withRule({ group: 'gone' }), 'rule 7 goes to a group that is not there ("gone")'],
-    [withRule({}), 'rule 7 needs a condition or a Jev question'],
-    [withRule({ when: [] }), 'rule 7 needs a condition or a Jev question'],
-    [withRule({ when: [{ field: 'size', op: 'is', value: 1 }] }), 'rule 7, condition 1: has no known field ("size")'],
-    [withRule({ when: [{ field: 'labels', op: 'is', value: 'x' }] }), 'rule 7, condition 1: labels takes has, hasNot, hasPrefix, not "is"'],
-    [withRule({ when: [{ field: 'read', op: 'is', value: true }, { field: 'time', op: 'newerThan', value: 4.5 }] }), 'rule 7, condition 2: time newerThan needs a whole number of minutes from 1 to 525600'],
-    [withRule({ when: [{ field: 'title', op: 'contains', value: '' }] }), 'rule 7, condition 1: title contains needs text of 1 to 200 characters'],
-    [withRule({ when: [{ field: 'to', op: 'in', value: [] }] }), 'rule 7, condition 1: to in needs a list of 1 to 50 values, each one of direct, group, cc, none'],
-    [withRule({ jev: { question: '', min: 0.5 } }), 'rule 7: the Jev question needs 1 to 300 characters'],
-    [withRule({ jev: { question: 'Urgent?', min: '0.5' } }), 'rule 7: the Jev threshold must be a number from 0 to 1'],
-    [withRule({ jev: { question: 'Urgent?', min: 1.5 } }), 'rule 7: the Jev threshold must be a number from 0 to 1'],
-    [withRule({ name: 'x'.repeat(61), when: [{ field: 'read', op: 'is', value: false }] }), 'rule 7: the name must be 1 to 60 characters on one line'],
-    [withRule({ enabled: 'yes', when: [{ field: 'read', op: 'is', value: false }] }), 'rule 7: enabled must be true or false'],
-    [{ ...d, rules: [...d.rules, { ...d.rules[0] }] }, 'rule 7: the id "read" is used twice'],
+    [null, 'the settings are not an object', ''],
+    [{ ...d, version: 1 }, 'these are not Inbox v2 settings (version 2)', 'version'],
+    [{ ...d, agenda: 'beside' }, 'the agenda must be top, bottom or off', 'agenda'],
+    [{ ...d, groups: 'x' }, 'the groups are not a list', 'groups'],
+    [{ ...d, groups: d.groups.filter((g) => g.id !== REST) }, 'the Rest group is missing', 'groups'],
+    [{ ...d, groups: [{ id: 'now', name: '  ' }, ...d.groups.slice(1)] }, 'group 1 needs a name of 1 to 40 characters', 'groups[0].name'],
+    [{ ...d, groups: [d.groups[0], d.groups[0], ...d.groups.slice(1)] }, 'group 2: the id "now" is used twice', 'groups[1].id'],
+    [{ ...d, groups: [{ id: '__proto__', name: 'X' }, ...d.groups] }, 'group 1 has a bad id', 'groups[0].id'],
+    [{ ...d, groups: Array.from({ length: 21 }, (_, i) => ({ id: `g${i}`, name: 'G' })) }, 'at most 20 groups, Rest included', 'groups'],
+    [withRule({ group: 'gone' }), 'rule 7 goes to a group that is not there ("gone")', 'rules[6].group'],
+    [withRule({}), 'rule 7 needs a condition or a Jev question', 'rules[6]'],
+    [withRule({ when: [] }), 'rule 7 needs a condition or a Jev question', 'rules[6]'],
+    [withRule({ when: [{ field: 'size', op: 'is', value: 1 }] }), 'rule 7, condition 1: has no known field ("size")', 'rules[6].when[0].field'],
+    [withRule({ when: [{ field: 'labels', op: 'is', value: 'x' }] }), 'rule 7, condition 1: labels takes has, hasNot, hasPrefix, not "is"', 'rules[6].when[0].op'],
+    [withRule({ when: [{ field: 'read', op: 'is', value: true }, { field: 'time', op: 'newerThan', value: 4.5 }] }), 'rule 7, condition 2: time newerThan needs a whole number of minutes from 1 to 525600', 'rules[6].when[1].value'],
+    [withRule({ when: [{ field: 'title', op: 'contains', value: '' }] }), 'rule 7, condition 1: title contains needs text of 1 to 200 characters', 'rules[6].when[0].value'],
+    [withRule({ when: [{ field: 'to', op: 'in', value: [] }] }), 'rule 7, condition 1: to in needs a list of 1 to 50 values, each one of direct, group, cc, none', 'rules[6].when[0].value'],
+    [withRule({ jev: { question: '', min: 0.5 } }), 'rule 7: the Jev question needs 1 to 300 characters', 'rules[6].jev.question'],
+    [withRule({ jev: { question: 'Urgent?', min: '0.5' } }), 'rule 7: the Jev threshold must be a number from 0 to 1', 'rules[6].jev.min'],
+    [withRule({ jev: { question: 'Urgent?', min: 1.5 } }), 'rule 7: the Jev threshold must be a number from 0 to 1', 'rules[6].jev.min'],
+    [withRule({ name: 'x'.repeat(61), when: [{ field: 'read', op: 'is', value: false }] }), 'rule 7: the name must be 1 to 60 characters on one line', 'rules[6].name'],
+    [withRule({ enabled: 'yes', when: [{ field: 'read', op: 'is', value: false }] }), 'rule 7: enabled must be true or false', 'rules[6].enabled'],
+    [{ ...d, rules: [...d.rules, { ...d.rules[0] }] }, 'rule 7: the id "read" is used twice', 'rules[6].id'],
   ]
-  for (const [raw, reason] of cases) assert.deepEqual(S.checkSettings(raw), { ok: false, reason }, reason)
+  for (const [raw, reason, path] of cases) assert.deepEqual(S.checkSettings(raw), { ok: false, reason, path }, reason)
 })
 
 test('checkSettings: everything it accepts survives readSettings unchanged (no silent drop)', () => {
@@ -374,7 +374,7 @@ test('host: Test of a bad draft or a rule not in it says why', async () => {
   await inbox.first
   const page = ctx.openSettingsPage()
   await page.send({ type: 'test', settings: { ...S.defaults(), agenda: 'x' }, ruleId: 'read' })
-  assert.deepEqual(page.last('test').result, { ok: false, reason: 'the agenda must be top, bottom or off' })
+  assert.deepEqual(page.last('test').result, { ok: false, reason: 'the agenda must be top, bottom or off', path: 'agenda' })
   await page.send({ type: 'test', settings: S.defaults(), ruleId: 'gone' })
   assert.deepEqual(page.last('test').result, { ok: false, reason: 'that rule is not in the draft' })
   await page.send({ type: 'test', settings: S.defaults(), ruleId: 42 })

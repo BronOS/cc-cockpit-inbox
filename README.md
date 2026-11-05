@@ -95,6 +95,39 @@ ccc inbox help
 A ref is `<pluginId>:<id>` and stays valid when the numbers shift. Output is bounded: at most 50 rows,
 one cut line each, with control characters removed.
 
+The rules and groups can be read and edited from the CLI too, so a Claude tab can do what the settings
+page does ("put mail from my lead in Now"):
+
+```
+ccc inbox rules                            the set: groups (n, name, id), numbered rules (on/off, what each checks → group), agenda
+ccc inbox rules export | import            the whole set as JSON on stdout | replace it with JSON from stdin
+ccc inbox rules add <json|-> [--at <n>]    add one rule
+ccc inbox rules set <n> <json|->           replace rule n (its id and on/off kept when the JSON has none)
+ccc inbox rules rm|enable|disable <n>      remove, turn on, turn off rule n
+ccc inbox rules move <n> <to>              move rule n
+ccc inbox rules test <json|-|n> [--at <n>] dry run over this window's items (Jev: cached answers only); stores nothing
+ccc inbox groups add <name> [--badge] [--collapsed] [--at <n>]
+ccc inbox groups rename <id|n> <name> | rm <id|n> | move <id|n> <to>
+```
+
+- **Which set**: without a flag, the set in effect in this window (this project's own when it has
+  one, else the global rules); `--global` the global set; `--project` this project's own set, refused
+  when the project has none. The CLI never gives a project a set of its own: that is the settings
+  page's "Use the global rules" switch.
+- Every change builds the whole set and is checked and saved exactly like a Save on the settings page:
+  on any problem nothing is stored and the error names the place, as a JSON path and by position
+  (`Nothing stored: rules[1].when[0].op: rule 2, condition 1: labels takes has, hasNot, hasPrefix, not
+  "is"`). It applies at once; other windows pick it up on their next read, as with a page save.
+- A rule is JSON as stored: `{"group": "now", "when": [{"field": "from.address", "op": "is", "value":
+  "lead@example.com"}]}`, or with `"jev": {"question": "...", "min": 0.8}`. A missing id is minted the
+  way the editor does (`r1`, `g1`, ...); a given one is kept. `-` reads the JSON from stdin.
+- `rules add` without `--at` puts the rule after the leading rules that go to Rest (filters such as
+  `read is true`) and before the first that goes to another group, so it beats the per-source
+  catch-alls; at the end when every rule goes to Rest. `groups add` puts the group just before Rest.
+
+The plugin ships a Claude skill, `inbox-rules`, with the rule format, the field table and these
+commands (`skills/inbox-rules/`), so a Claude tab asked to change the rules knows how.
+
 ```
 Inbox: 2 items
 Chat (1)

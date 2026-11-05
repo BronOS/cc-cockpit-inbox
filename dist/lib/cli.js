@@ -27,6 +27,32 @@ const HELP = `ccc inbox: the list of what needs you, in groups by your rules (br
 
 <n> is the number in the list as it stands now; <ref> is the stable reference printed at the end of each
 row (<pluginId>:<id>).
+
+Rules and groups. Without a flag a command works on the set in effect in this window: this project's own
+set when it has one, else the global rules. --global works on the global set; --project on this project's
+own set, and is refused when the project has none (it gets one only in Settings › This Project).
+
+  ccc inbox rules [--global|--project]          the set: groups (n, name, id, flags), numbered rules (on/off, what each checks → group, id), agenda
+  ccc inbox rules export                        the whole set as JSON on stdout
+  ccc inbox rules import                        replace the whole set with JSON read from stdin
+  ccc inbox rules add <json|-> [--at <n>]       add one rule; default place: after the leading rules that go to Rest, before the first that goes elsewhere
+  ccc inbox rules set <n> <json|->              replace rule n (its id and on/off are kept when the JSON has none)
+  ccc inbox rules rm <n>                        remove rule n
+  ccc inbox rules move <n> <to>                 move rule n to place <to>
+  ccc inbox rules enable <n>                    turn rule n on
+  ccc inbox rules disable <n>                   turn rule n off
+  ccc inbox rules test <json|-|n> [--at <n>]    dry run over this window's items: what the rule would place (Jev: cached answers only); stores nothing
+  ccc inbox groups [--global|--project]         the same listing as rules
+  ccc inbox groups add <name> [--badge] [--collapsed] [--at <n>]   a new group, by default just before Rest
+  ccc inbox groups rename <id|n> <name>         rename a group (Rest too)
+  ccc inbox groups rm <id|n>                    remove a group; its rules then go to Rest
+  ccc inbox groups move <id|n> <to>             move a group (Rest stays last)
+
+A rule is JSON: {"group": "now", "when": [{"field": "from.address", "op": "endsWith", "value": "@example.com"}]}, or
+with "jev": {"question": "Is this urgent?", "min": 0.8} (alone, or after "when" as a filter); "name" and "enabled" are
+optional and an id is minted when there is none. "-" reads the JSON from stdin. Every change is checked whole, like a
+Save on the settings page: on any problem nothing is stored and the error names the place (rules[2].when[0].op).
+The change applies at once. The inbox-rules skill has the full field and operator table.
 `
 
 /** One line, no control characters (C0, DEL, C1, line and paragraph separators, zero-width and bidi controls), cut to \`max\`. */
@@ -90,7 +116,7 @@ function formatWhy(row, traceText, setName = null) {
 /** @returns {{ cmd: string, target?: string, choice?: string, action?: string } | { error: string }} */
 function parse(argv) {
   const [cmd = 'list', ...rest] = argv
-  const usage = (m) => ({ error: `${m}\nUsage: ccc inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> ${CHOICES.join('|')} | help` })
+  const usage = (m) => ({ error: `${m}\nUsage: ccc inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> ${CHOICES.join('|')} | rules ... | groups ... | help` })
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return { cmd: 'help' }
   if (cmd === 'list') return rest.length ? usage('list takes no arguments') : { cmd }
   if (cmd === 'undo') return rest.length ? usage('undo takes no arguments') : { cmd }

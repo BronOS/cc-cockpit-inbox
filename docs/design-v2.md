@@ -328,6 +328,44 @@ project save while the project uses the global rules. The panel draws no setting
 `ccc inbox [list]` (groups with numbered rows and reasons), `open <n|ref>`, `act <n|ref> <action>`, `done <n|ref>`,
 `undo`, `why <n|ref>`, `help`. A ref is `<pluginId>:<id>`. `snooze` stays as in v1.
 
+### Rules and groups (`ccc inbox rules`, `ccc inbox groups`)
+
+A Claude tab asked to change the rules had no way to: they were editable only on the settings page. These commands
+read and edit the same sets with the same check and the same save:
+
+- `rules [list]`: which set (the header: "global rules", with "this project uses the global set" or "not in effect
+  here", or "this project's rules"), the groups (position, name, id, flags), the numbered rules (on/off, the conditions
+  as `why` phrases them, `Jev "<question>" >= <min>`, → group, id) and the agenda. `groups [list]` is the same text.
+- `rules export` prints the set as JSON (pretty when it fits the 256 KiB output limit, else compact, else refused:
+  never a cut JSON text). `rules import` replaces the whole set with JSON read from stdin.
+- Small edits: `rules add <json|-> [--at <n>]`, `set <n> <json|->` (the old id and on/off kept when the JSON has
+  none), `rm <n>`, `move <n> <to>`, `enable <n>`, `disable <n>`; `groups add <name> [--badge] [--collapsed] [--at <n>]`
+  (default just before Rest), `rename <id|n> <name>`, `rm <id|n>` (its rules go to Rest), `move <id|n> <to>`. Rest
+  cannot be removed or moved. A `-` reads the JSON from stdin (the manifest declares `stdin: true`).
+- `rules add` without `--at`: after the leading rules that go to Rest, before the first rule that goes to another
+  group (at the end when all go to Rest). The leading Rest rules are filters (`read is true`, decided question 3) that
+  should keep winning; after them the list runs from specific to general and a new rule is nearly always more specific
+  than the per-source catch-alls, which at the end would take its items first.
+- `rules test <json|-|n> [--at <n>]`: the page's Test (`testRule`) over the items of this window: a new rule put where
+  `add` would put it, or rule n where it stands (a disabled one tried as if enabled); the counts, then up to 20 of the
+  items it would place (badge, title, source, ref). Jev rules use cached answers only, and the output says so and how
+  many have no answer yet. Nothing is stored.
+- **Scope**: no flag is the set in effect in this window (the project's own when it has one, else the global set);
+  `--global` the global set; `--project` the project's own set, refused when it has none ("This project uses the
+  global rules; make it its own in Settings › This Project, or use --global"). A set of its own is made only by the
+  page's switch, never implicitly.
+- **One validator, one save path**: an edit builds the next whole set from the stored one (read again first, as the
+  page does when it opens) and hands it to `checkSettings`; on any problem nothing is stored and the error names the
+  place as a JSON path and by position (`rules[1].when[0].op: rule 2, condition 1: labels takes has, hasNot,
+  hasPrefix, not "is"`; `checkSettings` returns `path` beside `reason`). A set that passes is stored by the page's
+  `saveSettings` / `saveProjectSettings`: applied in this window at once, read by other windows on their next read.
+  Ids missing from a rule or group are minted with the editor's `mintId` (`r1`, `g1`, ...); given ids are kept (and
+  checked). Group add, rename and delete are the editor's own `addGroup`, `renameGroup`, `deleteGroup`
+  (settings/logic.js). Edits of one window run one at a time; across windows the last whole save wins, as with pages.
+  An edit whose call the app has already cancelled (30 s, Ctrl+C) stores nothing.
+- The skill `inbox-rules` (`skills/inbox-rules/SKILL.md`) carries the rule format, the field table, the commands and
+  the scope rule; `test/skill.test.js` checks its field and op table and caps against `rules.js` and `settings.js`.
+
 ## Migration
 
 ### Inbox 0.1.0 → 0.2.0

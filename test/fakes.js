@@ -368,8 +368,9 @@ function fakeCtx(opts = {}) {
         }
       },
     },
-    async runCli(argv) {
-      return ctx.cliHandler(argv, { stdin: '', cwd: '/tmp', signal: new AbortController().signal })
+    /** `ccc inbox <argv>`; `stdin` is what a `stdin: true` command gets ('' when nothing is piped). */
+    async runCli(argv, stdin = '', signal = new AbortController().signal) {
+      return ctx.cliHandler(argv, { stdin, cwd: '/tmp', signal })
     },
     /** What a host still holds on this ctx: panel and action listeners, overlay providers, running timers, the CLI, feed subscriptions. */
     live() {

@@ -40,6 +40,10 @@ test('the manifest: id, api, entry points exist, the CLI, the panel with the age
   assert.deepEqual(panel.slots, ['agenda'])
   assert.equal(manifest.contributes.slots, undefined, 'Inbox places the agenda slot, Calendar provides it')
   assert.deepEqual(manifest.contributes.cli.map((c) => c.name), ['inbox'])
+  // `rules import` and `<json|->` read stdin; the app reads it only for a command that declares it.
+  const [cli] = manifest.contributes.cli
+  assert.equal(cli.stdin, true)
+  assert.ok(cli.summary.length <= 200 && cli.usage.length <= 500 && cli.usage.startsWith('inbox '), 'the app caps summary at 200 and usage at 500 characters')
   assert.match(manifest.description, /cc-cockpit 0\.10\.0/)
   const page = manifest.contributes.settings.page
   assert.deepEqual(page, { entry: 'settings/index.html', scopes: ['app', 'project'] })

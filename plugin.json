@@ -21,11 +21,15 @@
     "cli": [
       {
         "name": "inbox",
-        "summary": "Inbox: the list by your rules, open, act, mark done, undo, why, snooze",
-        "usage": "inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | help"
+        "summary": "Inbox: the list by your rules, open, act, mark done, undo, why, snooze; read and edit the rules and groups",
+        "usage": "inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | rules [list|export|import|add|set|rm|move|enable|disable|test] [--global|--project] | groups [list|add|rename|rm|move] | help; ccc inbox help for details",
+        "stdin": true
       }
     ],
-    "skills": [{ "id": "inbox-source", "dir": "skills/inbox-source" }],
+    "skills": [
+      { "id": "inbox-source", "dir": "skills/inbox-source" },
+      { "id": "inbox-rules", "dir": "skills/inbox-rules" }
+    ],
     "settings": {
       "page": { "entry": "settings/index.html", "scopes": ["app", "project"] }
     }

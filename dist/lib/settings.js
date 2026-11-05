@@ -188,79 +188,90 @@ const shown = (v) => {
   return JSON.stringify(s.length > 40 ? `${s.slice(0, 39)}…` : s)
 }
 
-/** Why a condition does not fit the field table, or null when it does (rules.js `conditionOf` decides). */
-function conditionProblem(raw) {
-  if (!isObj(raw)) return 'is not a condition'
+/**
+ * Why a condition does not fit the field table, or null when it does (rules.js `conditionOf` decides):
+ * `{ key, text }`, `key` the part at fault (`field`, `op`, `value`, or '' for the whole condition).
+ */
+function conditionIssue(raw) {
+  if (!isObj(raw)) return { key: '', text: 'is not a condition' }
   const field = own(raw, 'field')
-  if (typeof field !== 'string' || !Object.hasOwn(FIELDS, field)) return `has no known field (${shown(field)})`
+  if (typeof field !== 'string' || !Object.hasOwn(FIELDS, field)) return { key: 'field', text: `has no known field (${shown(field)})` }
   const spec = FIELDS[field]
   const op = own(raw, 'op')
-  if (!spec.ops.includes(op)) return `${field} takes ${spec.ops.join(', ')}, not ${shown(op)}`
+  if (!spec.ops.includes(op)) return { key: 'op', text: `${field} takes ${spec.ops.join(', ')}, not ${shown(op)}` }
   if (conditionOf(raw)) return null
-  if (op === 'in') return `${field} in needs a list of 1 to ${MAX_IN} values, each ${NEEDS[spec.value]}`
-  return `${field} ${op} needs ${NEEDS[spec.value]}`
+  if (op === 'in') return { key: 'value', text: `${field} in needs a list of 1 to ${MAX_IN} values, each ${NEEDS[spec.value]}` }
+  return { key: 'value', text: `${field} ${op} needs ${NEEDS[spec.value]}` }
+}
+
+/** The text of `conditionIssue`, or null. */
+function conditionProblem(raw) {
+  const p = conditionIssue(raw)
+  return p ? p.text : null
 }
 
 /**
- * A save from the settings page, checked: `{ ok: true, settings }` (clean, what `readSettings` keeps:
- * Rest moved last) or `{ ok: false, reason }` naming the first thing that does not fit, by position
- * ("group 2", "rule 3, condition 1"). Nothing a check refuses would have survived `readSettings`
- * unchanged.
+ * A save from the settings page (and from `ccc inbox rules`), checked: `{ ok: true, settings }` (clean,
+ * what `readSettings` keeps: Rest moved last) or `{ ok: false, reason, path }` naming the first thing
+ * that does not fit, by position ("group 2", "rule 3, condition 1") in `reason` and as a JSON path
+ * into the value checked in `path` ("groups[1].name", "rules[2].when[0].op", '' for the whole value),
+ * so a set imported as JSON points at the line to fix. Nothing a check refuses would have survived
+ * `readSettings` unchanged.
  */
 function checkSettings(raw) {
-  const no = (reason) => ({ ok: false, reason })
+  const no = (reason, path = '') => ({ ok: false, reason, path })
   if (!isObj(raw)) return no('the settings are not an object')
-  if (own(raw, 'version') !== VERSION) return no('these are not Inbox v2 settings (version 2)')
-  if (!AGENDA.includes(own(raw, 'agenda'))) return no('the agenda must be top, bottom or off')
+  if (own(raw, 'version') !== VERSION) return no('these are not Inbox v2 settings (version 2)', 'version')
+  if (!AGENDA.includes(own(raw, 'agenda'))) return no('the agenda must be top, bottom or off', 'agenda')
   const groups = own(raw, 'groups')
   const rules = own(raw, 'rules')
-  if (!Array.isArray(groups)) return no('the groups are not a list')
-  if (!Array.isArray(rules)) return no('the rules are not a list')
-  if (groups.length > CAPS.groups) return no(`at most ${CAPS.groups} groups, Rest included`)
+  if (!Array.isArray(groups)) return no('the groups are not a list', 'groups')
+  if (!Array.isArray(rules)) return no('the rules are not a list', 'rules')
+  if (groups.length > CAPS.groups) return no(`at most ${CAPS.groups} groups, Rest included`, 'groups')
   const ids = new Set()
   for (const [i, g] of groups.entries()) {
     const n = i + 1
     const id = own(g, 'id')
-    if (typeof id !== 'string' || !ID.test(id)) return no(`group ${n} has a bad id`)
-    if (ids.has(id)) return no(`group ${n}: the id ${shown(id)} is used twice`)
+    if (typeof id !== 'string' || !ID.test(id)) return no(`group ${n} has a bad id`, `groups[${i}].id`)
+    if (ids.has(id)) return no(`group ${n}: the id ${shown(id)} is used twice`, `groups[${i}].id`)
     ids.add(id)
-    if (line(own(g, 'name'), CAPS.groupName) === undefined) return no(`group ${n} needs a name of 1 to ${CAPS.groupName} characters`)
+    if (line(own(g, 'name'), CAPS.groupName) === undefined) return no(`group ${n} needs a name of 1 to ${CAPS.groupName} characters`, `groups[${i}].name`)
   }
-  if (!ids.has(REST)) return no('the Rest group is missing')
-  if (rules.length > CAPS.rules) return no(`at most ${CAPS.rules} rules`)
+  if (!ids.has(REST)) return no('the Rest group is missing', 'groups')
+  if (rules.length > CAPS.rules) return no(`at most ${CAPS.rules} rules`, 'rules')
   const ruleIds = new Set()
   for (const [i, r] of rules.entries()) {
     const n = i + 1
-    if (!isObj(r)) return no(`rule ${n} is not a rule`)
+    if (!isObj(r)) return no(`rule ${n} is not a rule`, `rules[${i}]`)
     const id = own(r, 'id')
-    if (typeof id !== 'string' || !ID.test(id)) return no(`rule ${n} has a bad id`)
-    if (ruleIds.has(id)) return no(`rule ${n}: the id ${shown(id)} is used twice`)
+    if (typeof id !== 'string' || !ID.test(id)) return no(`rule ${n} has a bad id`, `rules[${i}].id`)
+    if (ruleIds.has(id)) return no(`rule ${n}: the id ${shown(id)} is used twice`, `rules[${i}].id`)
     ruleIds.add(id)
     const name = own(r, 'name')
     if (name !== undefined && name !== null && name !== '' && line(name, CAPS.ruleName) === undefined) {
-      return no(`rule ${n}: the name must be 1 to ${CAPS.ruleName} characters on one line`)
+      return no(`rule ${n}: the name must be 1 to ${CAPS.ruleName} characters on one line`, `rules[${i}].name`)
     }
     const enabled = own(r, 'enabled')
-    if (enabled !== undefined && typeof enabled !== 'boolean') return no(`rule ${n}: enabled must be true or false`)
+    if (enabled !== undefined && typeof enabled !== 'boolean') return no(`rule ${n}: enabled must be true or false`, `rules[${i}].enabled`)
     const group = own(r, 'group')
-    if (typeof group !== 'string' || !ids.has(group)) return no(`rule ${n} goes to a group that is not there (${shown(group)})`)
+    if (typeof group !== 'string' || !ids.has(group)) return no(`rule ${n} goes to a group that is not there (${shown(group)})`, `rules[${i}].group`)
     const when = own(r, 'when')
     if (when !== undefined) {
-      if (!Array.isArray(when)) return no(`rule ${n}: the conditions are not a list`)
-      if (when.length > CAPS.conditions) return no(`rule ${n} has more than ${CAPS.conditions} conditions`)
+      if (!Array.isArray(when)) return no(`rule ${n}: the conditions are not a list`, `rules[${i}].when`)
+      if (when.length > CAPS.conditions) return no(`rule ${n} has more than ${CAPS.conditions} conditions`, `rules[${i}].when`)
       for (const [j, c] of when.entries()) {
-        const p = conditionProblem(c)
-        if (p) return no(`rule ${n}, condition ${j + 1}: ${p}`)
+        const p = conditionIssue(c)
+        if (p) return no(`rule ${n}, condition ${j + 1}: ${p.text}`, `rules[${i}].when[${j}]${p.key ? `.${p.key}` : ''}`)
       }
     }
     const jev = own(r, 'jev')
     if (jev !== undefined) {
-      if (!isObj(jev)) return no(`rule ${n}: the Jev question is not an object`)
-      if (line(own(jev, 'question'), CAPS.question) === undefined) return no(`rule ${n}: the Jev question needs 1 to ${CAPS.question} characters`)
+      if (!isObj(jev)) return no(`rule ${n}: the Jev question is not an object`, `rules[${i}].jev`)
+      if (line(own(jev, 'question'), CAPS.question) === undefined) return no(`rule ${n}: the Jev question needs 1 to ${CAPS.question} characters`, `rules[${i}].jev.question`)
       const min = own(jev, 'min')
-      if (typeof min !== 'number' || !Number.isFinite(min) || min < 0 || min > 1) return no(`rule ${n}: the Jev threshold must be a number from 0 to 1`)
+      if (typeof min !== 'number' || !Number.isFinite(min) || min < 0 || min > 1) return no(`rule ${n}: the Jev threshold must be a number from 0 to 1`, `rules[${i}].jev.min`)
     }
-    if (!(Array.isArray(when) && when.length) && jev === undefined) return no(`rule ${n} needs a condition or a Jev question`)
+    if (!(Array.isArray(when) && when.length) && jev === undefined) return no(`rule ${n} needs a condition or a Jev question`, `rules[${i}]`)
   }
   return { ok: true, settings: readSettings(raw) }
 }
