@@ -41,6 +41,8 @@ const page = {
   confirming: false,
   /** A `useGlobal` is on its way to the host. */
   switching: false,
+  /** The `data-f` of the control the next render focuses instead of the one that has the focus. */
+  focusNext: null,
 }
 const PALETTE = ['green', 'red', 'blue', 'amber', 'violet', 'grey']
 const $ = (id) => document.getElementById(id)
@@ -125,17 +127,36 @@ function renderBar() {
   )
 }
 
+// ---- sections: the app's settings look (`ccc guide style`, "Settings page") ----
+
+/** A section: its title and description above a card of rows, as the app's own settings groups. */
+function section(title, desc, ...rows) {
+  return el('section', { class: 'cc-settings-group' },
+    el('div', { class: 'cc-settings-head' }, el('h3', { text: title }), desc ? el('p', { class: 'cc-settings-desc', text: desc }) : null),
+    el('div', { class: 'cc-settings-card' }, ...rows))
+}
+
+/** One setting: label and help on the left, the control on the right. `id` ties the label to it. */
+function settingRow(label, help, id, ...control) {
+  return el('div', { class: 'cc-settings-row' },
+    el('div', { class: 'cc-settings-row-text' },
+      el(id ? 'label' : 'span', { class: 'cc-settings-label', for: id, text: label }),
+      help ? el('span', { class: 'cc-settings-help', text: help }) : null),
+    el('div', { class: 'cc-settings-control' }, ...control))
+}
+
 // ---- groups ----
 
 function groupsCard() {
   const d = page.draft
-  const list = el('ul', { class: 'cc-list cc-compact', 'aria-label': 'Groups' })
+  // One grid for the rows and the add row, so the name fields, the checkboxes and the buttons sit in
+  // the same columns in every row, Rest's and the new name's included.
+  const list = el('ul', { class: 'cc-settings-grid groups', 'aria-label': 'Groups' })
   d.groups.forEach((g, i) => {
     const rest = g.id === REST_ID
     const f = `g:${g.id}`
     const name = el('input', {
       type: 'text',
-      class: 'name',
       value: g.name,
       maxlength: String(page.table.caps.groupName),
       'aria-label': `Name of group ${i + 1}`,
@@ -144,20 +165,20 @@ function groupsCard() {
       onchange: () => later(),
     })
     const moved = rulesIn(d, g.id)
-    const row = el('li', { class: 'cc-row group-row' },
+    const row = el('li', { class: 'cc-settings-item' },
       name,
       checkbox(`${f}:collapsed`, 'Collapsed', g.collapsed === true, (on) => edit(setGroupFlag(page.draft, g.id, 'collapsed', on))),
       checkbox(`${f}:badge`, 'Badge', g.badge === true, (on) => edit(setGroupFlag(page.draft, g.id, 'badge', on))))
-    if (rest) row.append(el('span', { class: 'fixed cc-muted', text: 'built in, always last' }))
+    if (rest) row.append(el('span', { class: 'fixed cc-muted', text: 'built in, always last', title: 'Built in, always last: it cannot move or go' }))
     else {
-      row.append(el('span', { class: 'cc-row-actions' },
+      row.append(
         btn('↑', () => edit(moveGroup(page.draft, g.id, -1)), { cls: 'cc-icon', title: `Move ${g.name} up`, f: `${f}:up`, disabled: !canMoveGroup(d, g.id, -1) }),
         btn('↓', () => edit(moveGroup(page.draft, g.id, 1)), { cls: 'cc-icon', title: `Move ${g.name} down`, f: `${f}:down`, disabled: !canMoveGroup(d, g.id, 1) }),
         btn('Delete', () => edit(deleteGroup(page.draft, g.id)), {
           cls: 'cc-danger',
           title: moved ? `Delete ${g.name}; its ${moved} rule${moved === 1 ? '' : 's'} move to ${groupName(d, REST_ID)} (Discard changes undoes it)` : `Delete ${g.name} (Discard changes undoes it)`,
           f: `${f}:delete`,
-        })))
+        }))
     }
     list.append(row)
   })
@@ -174,11 +195,8 @@ function groupsCard() {
     }
   })
   const full = d.groups.length >= page.table.caps.groups
-  return el('section', { class: 'cc-card' },
-    el('h3', { class: 'cc-card-title', text: 'Groups' }),
-    el('span', { class: 'cc-help', text: 'The order the panel shows them in. Collapsed groups start folded; badge groups count their unread items on the panel icon. Deleting a group moves its rules to Rest.' }),
-    list,
-    el('div', { class: 'line add' }, newName, btn('Add group', add, { f: 'g-add', disabled: full, title: full ? `At most ${page.table.caps.groups} groups` : undefined })))
+  list.append(el('li', { class: 'cc-settings-item add' }, newName, btn('Add group', add, { f: 'g-add', disabled: full, title: full ? `At most ${page.table.caps.groups} groups` : undefined })))
+  return section('Groups', 'The order the panel shows them in. Collapsed groups start folded; badge groups count their unread items on the panel icon. Deleting a group moves its rules to Rest.', list)
 }
 
 // ---- rules ----
@@ -292,7 +310,9 @@ function editorEl(rule, n) {
 
 function rulesCard() {
   const d = page.draft
-  const list = el('ol', { class: 'cc-list', 'aria-label': 'Rules' })
+  // One grid: the rule rows, the open rule's editor under its row (from the rule's column on) and the
+  // add row last, as in Groups.
+  const list = el('ol', { class: 'cc-settings-grid rules', 'aria-label': 'Rules' })
   d.rules.forEach((rule, i) => {
     const n = i + 1
     const f = `r:${rule.id}`
@@ -300,51 +320,49 @@ function rulesCard() {
     const note = ruleNote(rule, page.jevOn)
     const main = el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: rule.name ? `${rule.name}: ${ruleSummary(rule, d)}` : ruleSummary(rule, d) }))
     if (note) main.append(el('span', { class: 'cc-row-meta', text: note }))
-    list.append(el('li', { class: `cc-row rule-row${rule.enabled ? '' : ' off'}` },
+    list.append(el('li', { class: `cc-settings-item rule${rule.enabled ? '' : ' off'}` },
       el('span', { class: 'num', text: String(n) }),
       el('input', { type: 'checkbox', checked: rule.enabled, 'data-f': `${f}:on`, 'aria-label': `Rule ${n} enabled`, title: 'Enabled', onchange: (ev) => edit(setRule(page.draft, rule.id, { enabled: ev.target.checked })) }),
       main,
-      el('span', { class: 'cc-row-actions' },
-        btn(open ? 'Close' : 'Edit', () => {
-          page.open = open ? null : rule.id
-          later()
-        }, { f: `${f}:edit`, title: open ? `Close rule ${n}` : `Edit rule ${n}`, cls: open ? 'cc-ghost' : undefined }),
-        btn('↑', () => edit(moveRule(page.draft, rule.id, -1)), { cls: 'cc-icon', title: `Move rule ${n} up`, f: `${f}:up`, disabled: i === 0 }),
-        btn('↓', () => edit(moveRule(page.draft, rule.id, 1)), { cls: 'cc-icon', title: `Move rule ${n} down`, f: `${f}:down`, disabled: i === d.rules.length - 1 }),
-        btn('Duplicate', () => {
-          const r = duplicateRule(page.draft, rule.id)
-          if (r.id) page.open = r.id
-          edit(r.draft)
-        }, { f: `${f}:dup`, title: `Duplicate rule ${n}`, disabled: d.rules.length >= page.table.caps.rules }),
-        btn('Delete', () => {
-          if (page.open === rule.id) page.open = null
-          edit(deleteRule(page.draft, rule.id))
-        }, { cls: 'cc-danger', f: `${f}:delete`, title: `Delete rule ${n} (Discard changes undoes it)` }))))
-    if (open) list.append(el('li', {}, editorEl(rule, n)))
+      btn(open ? 'Close' : 'Edit', () => {
+        page.open = open ? null : rule.id
+        later()
+      }, { f: `${f}:edit`, title: open ? `Close rule ${n}` : `Edit rule ${n}`, cls: open ? 'cc-ghost' : undefined }),
+      btn('↑', () => edit(moveRule(page.draft, rule.id, -1)), { cls: 'cc-icon', title: `Move rule ${n} up`, f: `${f}:up`, disabled: i === 0 }),
+      btn('↓', () => edit(moveRule(page.draft, rule.id, 1)), { cls: 'cc-icon', title: `Move rule ${n} down`, f: `${f}:down`, disabled: i === d.rules.length - 1 }),
+      btn('Duplicate', () => {
+        const r = duplicateRule(page.draft, rule.id)
+        if (r.id) page.open = r.id
+        edit(r.draft)
+      }, { f: `${f}:dup`, title: `Duplicate rule ${n}`, disabled: d.rules.length >= page.table.caps.rules }),
+      btn('Delete', () => {
+        if (page.open === rule.id) page.open = null
+        edit(deleteRule(page.draft, rule.id))
+      }, { cls: 'cc-danger', f: `${f}:delete`, title: `Delete rule ${n} (Discard changes undoes it)` })))
+    if (open) list.append(el('li', { class: 'cc-settings-item editor-row' }, editorEl(rule, n)))
   })
-  const body = d.rules.length ? list : el('div', { class: 'cc-empty' }, el('p', { text: 'No rules: every item goes to Rest. Add one, or reset to the defaults.' }))
+  if (!d.rules.length) list.append(el('li', { class: 'cc-empty' }, el('p', { text: 'No rules: every item goes to Rest. Add one, or reset to the defaults.' })))
   const full = d.rules.length >= page.table.caps.rules
-  return el('section', { class: 'cc-card' },
-    el('h3', { class: 'cc-card-title', text: 'Rules' }),
-    el('span', { class: 'cc-help', text: 'Checked in order; the first enabled rule that holds puts the item in its group. An item no rule takes goes to Rest.' }),
-    el('div', { class: 'line' }, btn('Add rule', () => {
-      const r = addRule(page.draft, page.table)
-      page.open = r.id
-      edit(r.draft)
-    }, { f: 'r-add', disabled: full, title: full ? `At most ${page.table.caps.rules} rules` : 'A new rule at the top' })),
-    body)
+  list.append(el('li', { class: 'cc-settings-item add' }, btn('Add rule', () => {
+    const r = addRule(page.draft, page.table)
+    page.open = r.id
+    // The new rule is first, the button last: focus goes to its name, which brings it into view.
+    page.focusNext = `r:${r.id}:name`
+    edit(r.draft)
+  }, { f: 'r-add', disabled: full, title: full ? `At most ${page.table.caps.rules} rules` : 'A new rule at the top' })))
+  return section('Rules', 'Checked in order; the first enabled rule that holds puts the item in its group. An item no rule takes goes to Rest.', list)
 }
 
 // ---- sources, agenda ----
 
 function sourcesCard() {
-  const body = page.sources.length ? el('ul', { class: 'cc-list cc-compact', 'aria-label': 'Sources' }) : el('div', { class: 'cc-empty' }, el('p', { text: 'No source yet: enable a plugin that offers an inbox feed (Chat, Mail, Jira) in this project.' }))
+  const body = page.sources.length ? el('ul', { class: 'cc-settings-grid sources', 'aria-label': 'Sources' }) : el('div', { class: 'cc-empty' }, el('p', { text: 'No source yet: enable a plugin that offers an inbox feed (Chat, Mail, Jira) in this project.' }))
   for (const s of page.sources) {
     const m = sourceRow(s)
-    body.append(el('li', { class: 'cc-row source-row' }, badge(m.badge || '?', s.color),
+    body.append(el('li', { class: 'cc-settings-item' }, badge(m.badge || '?', s.color),
       el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.label, title: m.id }), el('span', { class: m.problem ? 'cc-row-meta cc-error' : 'cc-row-meta', text: m.meta }))))
   }
-  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Sources' }), body, el('p', { class: 'cc-help', text: SOURCE_NOTE }))
+  return section('Sources', SOURCE_NOTE, body)
 }
 
 function agendaCard() {
@@ -353,10 +371,7 @@ function agendaCard() {
     const r = el('input', { type: 'radio', name: 'agenda', value: c.value, checked: page.draft.agenda === c.value, 'data-f': `agenda:${c.value}`, onchange: () => edit(setAgenda(page.draft, c.value)) })
     box.append(el('label', { class: 'check' }, r, c.label))
   }
-  return el('section', { class: 'cc-card' },
-    el('h3', { class: 'cc-card-title', text: 'Agenda' }),
-    el('span', { class: 'cc-help', text: "Today's events from the calendar plugin, in a strip of the Inbox panel." }),
-    box)
+  return section('Agenda', "Today's events from the calendar plugin, in a strip of the Inbox panel.", settingRow('Position', null, null, box))
 }
 
 // ---- a project's page: the switch, and the global set read-only ----
@@ -386,13 +401,10 @@ function setCard() {
       } else askUseGlobal(false)
     },
   })
-  const card = el('section', { class: 'cc-card' },
-    el('h3', { class: 'cc-card-title', text: 'Rule set' }),
-    el('div', { class: 'cc-field' }, el('label', { for: 'use-global' }, sw, SET_TEXT.switchLabel)),
-    el('span', { class: 'cc-help', text: page.useGlobal ? SET_TEXT.global : SET_TEXT.project }))
-  if (page.switching) card.append(el('p', { class: 'cc-muted', role: 'status', text: page.status }))
+  const rows = [settingRow(SET_TEXT.switchLabel, page.useGlobal ? SET_TEXT.global : SET_TEXT.project, 'use-global', sw)]
+  if (page.switching) rows.push(el('div', { class: 'cc-settings-row cc-muted', role: 'status', text: page.status }))
   if (page.confirming) {
-    card.append(el('div', { class: 'line', role: 'alertdialog', 'aria-label': SET_TEXT.confirm },
+    rows.push(el('div', { class: 'cc-settings-row confirm', role: 'alertdialog', 'aria-label': SET_TEXT.confirm },
       el('span', { text: SET_TEXT.confirm }),
       btn(SET_TEXT.confirmButton, () => askUseGlobal(true), { cls: 'cc-danger', f: 'use-global-yes' }),
       btn('Cancel', () => {
@@ -400,39 +412,42 @@ function setCard() {
         later()
       }, { cls: 'cc-ghost', f: 'use-global-no' })))
   }
-  return card
+  return section('Rule set', null, ...rows)
 }
 
 function readonlyGroupsCard(d) {
-  const list = el('ul', { class: 'cc-list cc-compact', 'aria-label': 'Groups' })
+  const list = el('ul', { class: 'cc-settings-list', 'aria-label': 'Groups' })
   for (const g of d.groups) {
     const m = groupLine(g)
-    list.append(el('li', { class: 'cc-row' }, el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.name }), m.meta ? el('span', { class: 'cc-row-meta', text: m.meta }) : null)))
+    list.append(el('li', { class: 'cc-settings-row' }, el('div', { class: 'cc-settings-row-text' }, el('span', { class: 'cc-settings-label', text: m.name }), m.meta ? el('span', { class: 'cc-settings-help', text: m.meta }) : null)))
   }
-  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Groups' }), list)
+  return section('Groups', null, list)
 }
 
 function readonlyRulesCard(d) {
-  const list = el('ol', { class: 'cc-list', 'aria-label': 'Rules' })
+  const list = el('ol', { class: 'cc-settings-grid readonly-rules', 'aria-label': 'Rules' })
   d.rules.forEach((rule, i) => {
     const note = ruleNote(rule, page.jevOn)
     const main = el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: rule.name ? `${rule.name}: ${ruleSummary(rule, d)}` : ruleSummary(rule, d) }))
     if (note) main.append(el('span', { class: 'cc-row-meta', text: note }))
-    list.append(el('li', { class: `cc-row rule-row${rule.enabled ? '' : ' off'}` }, el('span', { class: 'num', text: String(i + 1) }), main))
+    list.append(el('li', { class: `cc-settings-item rule${rule.enabled ? '' : ' off'}` }, el('span', { class: 'num', text: String(i + 1) }), main))
   })
   const body = d.rules.length ? list : el('div', { class: 'cc-empty' }, el('p', { text: 'No rules: every item goes to Rest.' }))
-  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Rules' }), body)
+  return section('Rules', null, body)
 }
 
 function readonlyAgendaCard(d) {
-  return el('section', { class: 'cc-card' }, el('h3', { class: 'cc-card-title', text: 'Agenda' }), el('p', { text: agendaText(d.agenda) }))
+  return section('Agenda', null, settingRow('Position', null, null, el('span', { text: agendaText(d.agenda) })))
 }
 
 // ---- render ----
 
 function render() {
   const a = document.activeElement
-  const focus = a && a.getAttribute ? a.getAttribute('data-f') : null
+  // A control that asked for the focus (Add rule: the new rule's name), else the one that had it.
+  const next = page.focusNext
+  page.focusNext = null
+  const focus = next || (a && a.getAttribute ? a.getAttribute('data-f') : null)
   const main = $('main')
   const error = $('error')
   main.textContent = ''
@@ -455,7 +470,8 @@ function render() {
   else main.append(readonlyGroupsCard(page.draft), readonlyRulesCard(page.draft), sourcesCard(), readonlyAgendaCard(page.draft))
   if (focus) {
     const n = document.querySelector(`[data-f="${CSS.escape(focus)}"]`)
-    if (n && !n.disabled) n.focus({ preventScroll: true })
+    // Scrolled to only when it moved there: a redraw keeps the view where it was.
+    if (n && !n.disabled) n.focus({ preventScroll: !next })
   }
 }
 

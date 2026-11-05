@@ -8,8 +8,10 @@
       page also the "Use the global rules" switch. The page CSP allows script from
       this plugin's own files only, so the logic lives in index.js; logic.js holds its pure parts. The
       SDK gives `ccPanel` (the port to dist/host.js), the theme variables and the component stylesheet
-      (`ccc guide style`: .cc-toolbar, .cc-card, .cc-list, .cc-row, .cc-field, .cc-badge,
-      .cc-error-line, .cc-empty). The rules below only lay those out (unlayered, so they win over the
+      (`ccc guide style`): each section is a .cc-settings-group, its title over a .cc-settings-card
+      of rows, as the app's own settings above this page; the groups and rules are .cc-settings-grid
+      lists whose rows share columns. Also .cc-toolbar, .cc-field, .cc-row (Test examples), .cc-badge,
+      .cc-error-line, .cc-empty. The rules below only lay those out (unlayered, so they win over the
       layer); colours only from the theme tokens. -->
     <script src="/__sdk/panel.js"></script>
     <script src="logic.js" defer></script>
@@ -19,24 +21,30 @@
       [hidden] { display: none; }
       .cc-toolbar { position: sticky; top: 0; z-index: 3; background: var(--cc-bg); border-bottom: 1px solid var(--cc-border); }
       .cc-toolbar .status { flex: 1; min-width: 0; font-size: var(--cc-text-s); }
-      #error:not(:empty) { padding: var(--cc-space-3) var(--cc-space-3) 0; }
-      #main { display: flex; flex-direction: column; gap: var(--cc-space-3); padding: var(--cc-space-3) var(--cc-space-3) var(--cc-space-4); }
-      .cc-card > .cc-help { display: block; margin: 0 0 var(--cc-space-2); }
+      #error:not(:empty) { padding: var(--cc-space-3) var(--cc-space-4) 0; }
+      #main { padding: var(--cc-space-4) var(--cc-space-4) var(--cc-space-5); }
+      .cc-settings-card > .cc-empty, .cc-settings-grid > .cc-empty { padding: var(--cc-space-5) var(--cc-space-4); }
       .line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cc-space-2); }
       .check { display: inline-flex; align-items: center; gap: var(--cc-space-1); white-space: nowrap; }
-      .num { flex: none; width: 2.2em; color: var(--cc-fg-muted); font-size: var(--cc-text-s); text-align: right; }
+      /* A name field fills its column, so every row's next column starts at the same x. */
+      .cc-settings-item > input[type='text'] { box-sizing: border-box; width: 100%; min-width: 0; }
 
-      /* Groups: the name field takes the room, the flags and moves after it. */
-      .group-row .name { flex: 1 1 140px; min-width: 0; }
-      .group-row .fixed { font-size: var(--cc-text-s); }
-      .add { margin-top: var(--cc-space-2); }
-      .add input { flex: 1 1 160px; min-width: 0; }
+      /* Groups: name, Collapsed, Badge, up, down, Delete. Rest has no moves and no Delete: its note
+         spans those three columns and adds no width of its own (contain), so it never shifts them. */
+      .groups { --cc-settings-cols: minmax(0, 1fr) auto auto var(--cc-control-h) var(--cc-control-h) auto; }
+      .groups .fixed { grid-column: 4 / -1; contain: inline-size; overflow: hidden; font-size: var(--cc-text-s); white-space: nowrap; text-overflow: ellipsis; }
+      .groups .add > button { grid-column: 2 / -1; justify-self: start; }
 
-      /* Rules: one row each, the editor below the open one. */
-      .rule-row .cc-row-title { white-space: normal; overflow-wrap: anywhere; }
-      .rule-row.off .cc-row-title { color: var(--cc-fg-muted); }
-      .rule-row .cc-row-actions button { height: 22px; padding: 0 var(--cc-space-2); font-size: var(--cc-text-s); }
-      .editor { display: flex; flex-direction: column; gap: var(--cc-space-2); margin: 0 0 var(--cc-space-2) calc(2.2em + var(--cc-space-3)); padding: var(--cc-space-3); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-m); background: var(--cc-bg); }
+      /* Rules: number, enabled, the rule, Edit, up, down, Duplicate, Delete; the open rule's editor
+         under its row, from the rule's column on. */
+      .rules { --cc-settings-cols: auto auto minmax(0, 1fr) auto var(--cc-control-h) var(--cc-control-h) auto auto; }
+      .rules .add > button { grid-column: 1 / -1; justify-self: start; }
+      .readonly-rules { --cc-settings-cols: auto minmax(0, 1fr); }
+      .num { min-width: 1.4em; color: var(--cc-fg-muted); font-size: var(--cc-text-s); text-align: right; font-variant-numeric: tabular-nums; }
+      .rule .cc-row-title { white-space: normal; overflow-wrap: anywhere; }
+      .rule.off .cc-row-title { color: var(--cc-fg-muted); }
+      .editor-row { background: color-mix(in srgb, var(--cc-fg) 2.5%, transparent); }
+      .editor { grid-column: 3 / -1; display: flex; flex-direction: column; gap: var(--cc-space-2); }
       .editor .cc-field { margin: 0; }
       .cond { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--cc-space-1); }
       .cond select { max-width: 100%; }
@@ -51,8 +59,10 @@
       .test .cc-row { min-height: 0; padding-block: 2px; }
       .test .cc-badge { flex: none; }
 
-      .source-row .cc-badge { flex: none; min-width: 40px; justify-content: center; }
-      .agenda { display: flex; flex-wrap: wrap; gap: var(--cc-space-4); }
+      .sources { --cc-settings-cols: auto minmax(0, 1fr); }
+      .sources .cc-badge { min-width: 40px; justify-content: center; }
+      .agenda { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cc-space-4); }
+      .confirm { flex-wrap: wrap; justify-content: flex-start; gap: var(--cc-space-2); }
     </style>
   </head>
   <body>
