@@ -223,7 +223,8 @@ project's rules" in its header only for a project's own set).
   item again (as a rules edit always did); switching to an override with the same content places nothing again.
 - Stay app-wide, whatever set placed an item: Done and snooze (lib/state.js), the Jev answer cache (`jv:` keys; an answer
   belongs to a question and an item, not to a set) and the panel's remembered group open states (`ui:groupsOpen`, keyed
-  by group id, so a project's groups share the entry of a global group with the same id).
+  by group id, so a project's groups share the entry of a global group with the same id). A window keeps the stored
+  states of groups its own set lacks (another project's), at most 200 ids, the longest-untouched dropped first.
 
 ### Evaluation
 

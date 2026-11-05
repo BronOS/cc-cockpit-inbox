@@ -80,6 +80,8 @@ const TEST_TITLE = 120
 // like the settings. A panel page has an opaque origin (no localStorage), so the host keeps it:
 // `{ <group id>: true | false }`, only ids of groups that exist, at most one per group cap.
 const OPEN_KEY = 'ui:groupsOpen'
+/** How many group states OPEN_KEY keeps across every project's rule set. */
+const MAX_OPEN_KEPT = 200
 const GROUP_ID = S.ID
 const FULL_FIT = Object.freeze({ rows: ROWS_SHOWN, preview: PREVIEW_SHOWN })
 const OLD_APP = 'Inbox 0.2.0 needs cc-cockpit 0.10.0 or newer (slots, overlay buttons and the services collector). Update the app.'
@@ -183,8 +185,14 @@ function createInbox(ctx, opts = {}) {
   let lastHeader = ''
   let lastAgenda
   let query = ''
-  /** group id -> open, as the person left it (OPEN_KEY). */
+  /** group id -> open, as the person left it (OPEN_KEY), for this window's groups only. */
   let groupsOpen = {}
+  /**
+   * Every well-formed entry of OPEN_KEY, also for groups this window does not have. With per-project
+   * rule sets another project's groups are not ours, and storing only `groupsOpen` would wipe what the
+   * person left in that project's window. Capped so stale ids cannot grow the key without bound.
+   */
+  let storedOpen = {}
   let jevLoadedAt = -Infinity
   let publishQueued = false
   let ticking = null
@@ -536,12 +544,24 @@ function createInbox(ctx, opts = {}) {
     return out
   }
 
+  /** OPEN_KEY's well-formed entries, any group id, the newest MAX_OPEN_KEPT (insertion order). */
+  function keptOpen(raw) {
+    const out = {}
+    if (isObj(raw)) for (const [id, v] of Object.entries(raw)) if (GROUP_ID.test(id) && typeof v === 'boolean') out[id] = v
+    const ids = Object.keys(out)
+    for (const id of ids.slice(0, Math.max(0, ids.length - MAX_OPEN_KEPT))) delete out[id]
+    return out
+  }
+
   /** The panel's toggle of a group: remembered at once here, stored for the other windows and the next start. */
   async function rememberOpen(id, open) {
     if (typeof id !== 'string' || !GROUP_ID.test(id) || typeof open !== 'boolean') return
-    const next = openOf({ ...groupsOpen, [id]: open })
-    if (!Object.hasOwn(next, id)) return
-    groupsOpen = next
+    if (!Object.hasOwn(openOf({ [id]: open }), id)) return
+    // Re-inserted last, so the cap drops the longest-untouched ids first.
+    const { [id]: _old, ...others } = storedOpen
+    const next = keptOpen({ ...others, [id]: open })
+    storedOpen = next
+    groupsOpen = openOf(next)
     try {
       await ctx.appStorage.set(OPEN_KEY, next)
     } catch (e) {
@@ -573,7 +593,10 @@ function createInbox(ctx, opts = {}) {
     // After the settings: only ids of groups that exist are kept.
     try {
       const raw = await ctx.appStorage.get(OPEN_KEY)
-      if (raw !== undefined) groupsOpen = openOf(raw)
+      if (raw !== undefined) {
+        storedOpen = keptOpen(raw)
+        groupsOpen = openOf(storedOpen)
+      }
     } catch (e) {
       ctx.log.warn(`group state: ${why(e)}`)
     }

@@ -653,6 +653,20 @@ test('a group\'s open state is remembered app-wide: carried in the state, kept o
   again.inbox.dispose()
 })
 
+// Per-project rule sets: a window whose set lacks another project's groups must not wipe their state.
+test('a toggle keeps the stored open state of groups this window does not have', async () => {
+  const store = fakeAppStorage()
+  await store.set('ui:groupsOpen', { work: false, rest: false })
+  const w = setup({ ctx: fakeCtx({ appStorage: store }), feeds: { 'bronos.mail': mailFeed([item2('m1')]) } })
+  await w.inbox.first
+  await settle()
+  await w.ctx.sendPanel({ type: 'hello' })
+  assert.deepEqual(w.ctx.lastState().groupsOpen, { rest: false })
+  await w.ctx.sendPanel({ type: 'groupOpen', id: 'rest', open: true })
+  assert.deepEqual(await store.get('ui:groupsOpen'), { work: false, rest: true })
+  w.inbox.dispose()
+})
+
 // ---- a project's own rule set (design-v2 "Rules" › "Per project") ----
 
 const bossRules = (agenda = 'off') => ({
