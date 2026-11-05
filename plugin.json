@@ -25,6 +25,7 @@
         "usage": "inbox [list] | open <n|ref> | act <n|ref> <action> | done <n|ref> | undo | why <n|ref> | snooze <n|ref> 1h|afternoon|tomorrow|changes | help"
       }
     ],
+    "skills": [{ "id": "inbox-source", "dir": "skills/inbox-source" }],
     "settings": {
       "page": { "entry": "settings/index.html", "scopes": ["app", "project"] }
     }

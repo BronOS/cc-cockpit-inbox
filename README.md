@@ -122,6 +122,9 @@ for it. The contract, in short (full text in [docs/design-v2.md](docs/design-v2.
 - Everything is validated as untrusted input: strings are capped, unknown fields dropped, a bad item
   left out and counted on the source's line; at most 1000 items per source are kept.
 
+The plugin ships a Claude skill, `inbox-source`, with this contract in full (`skills/inbox-source/`),
+so a Claude tab asked to write a source learns it unprompted.
+
 ## Development
 
 The plugin is plain JavaScript with no build and no dependencies. `npm test` runs the node:test
