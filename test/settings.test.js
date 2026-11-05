@@ -30,8 +30,12 @@ test('junk, a v2 value without lists: the defaults (agenda kept when valid)', ()
   for (const junk of [null, 'x', 3, [], true]) assert.deepEqual(S.readSettings(junk), S.defaults())
   assert.deepEqual(S.readSettings({ version: 2, groups: 'no', rules: [], agenda: 'off' }), { ...S.defaults(), agenda: 'off' })
   assert.deepEqual(S.readSettings({ version: 2, groups: [], agenda: 'sideways' }), S.defaults())
-  // A newer format this Inbox does not know is not guessed at.
-  assert.deepEqual(S.readSettings({ version: 3, groups: [], rules: [] }), S.defaults())
+  // A newer format (a downgrade) is not taken for Inbox 0.1.0's: its valid lists are kept, not replaced by the defaults.
+  const kept = S.readSettings({ version: 3, groups: [{ id: 'now', name: 'Now' }], rules: [{ id: 'a', group: 'now', when: [{ field: 'read', op: 'is', value: true }] }], agenda: 'off' })
+  assert.equal(kept.version, 2)
+  assert.deepEqual(kept.rules.map((r) => r.id), ['a'])
+  assert.equal(kept.agenda, 'off')
+  assert.deepEqual(S.readSettings({ version: 1, calendar: { position: 'bottom' } }), { ...S.defaults(), agenda: 'bottom' })
 })
 
 test('migration from 0.1.0: everything dropped but the calendar position', () => {

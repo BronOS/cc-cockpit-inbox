@@ -151,7 +151,11 @@ function agendaOfV1(raw) {
 /** The settings, whole and valid, from whatever was stored (undefined: the defaults). */
 function readSettings(raw) {
   if (!isObj(raw)) return defaults()
-  if (own(raw, 'version') !== VERSION) return { ...defaults(), agenda: agendaOfV1(raw) }
+  // Only Inbox 0.1.0's data (no version, or 1) takes the migration path. Any other version (a newer
+  // one after a downgrade) is read as v2, keeping what is valid in it, so a save does not replace the
+  // person's rules with the defaults.
+  const version = own(raw, 'version')
+  if (version === undefined || version === 1) return { ...defaults(), agenda: agendaOfV1(raw) }
   const agenda = AGENDA.includes(own(raw, 'agenda')) ? own(raw, 'agenda') : 'top'
   const groups = own(raw, 'groups')
   const rules = own(raw, 'rules')

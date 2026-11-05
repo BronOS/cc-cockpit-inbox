@@ -235,9 +235,11 @@ Default settings (also the reset):
 
 | Groups (order) | Rules (order) |
 |---|---|
-| Chat, Mail, Jira, Rest (collapsed) | 1. `read is true` → Rest · 2. `sourceKind is chat` → Chat · 3. `sourceKind is mail` → Mail · 4. `sourceKind is issues` → Jira |
+| Now, Chat, Mail, Jira, Rest (collapsed) | 1. `read is true` → Rest · 2. `sourceKind is chat` and `mentionsMe is true` → Now · 3. `sourceKind is chat` and `to is direct` → Now · 4. `sourceKind is chat` → Chat · 5. `sourceKind is mail` → Mail · 6. `sourceKind is issues` → Jira |
 
-That is decision 2's default "by source (Chat, Email, Jira)": the person then adds rules above them, for example
+That is decision 2's default "by source (Chat, Email, Jira)", plus a Now group for what asks for the person in Chat (an
+@mention, a direct message), so Chat itself holds the channel traffic. Jira and Gmail have no such rule: in Jira every
+assigned issue is `to: direct` and in Gmail most mail is, so it would empty Mail and Jira into Now. The person then adds rules above them, for example
 "`from.address in [lead@example.com]` → Now" and "Jev: Is this urgent? ≥ 0.8 → Now" with a group Now first. A source of
 kind `other` lands in Rest until a rule names it. `badge: true` groups count toward the panel's icon badge (default
 Chat, Mail, Jira); the badge is the number of unread items in them.

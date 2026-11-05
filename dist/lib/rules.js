@@ -135,6 +135,18 @@ function fieldOf(item, field, kind) {
   }
 }
 
+// A condition's value, normalised once (NFKC + lower case): `holds` runs per item per condition, and an
+// `in` list can hold 50 values, so normalising there costs millions of calls per refresh at the caps.
+const wants = new WeakMap()
+function wantOf(cond) {
+  let w = wants.get(cond)
+  if (w === undefined) {
+    w = Array.isArray(cond.value) ? cond.value.map(norm) : norm(cond.value)
+    wants.set(cond, w)
+  }
+  return w
+}
+
 /** Whether one condition holds for an item at `now`. */
 function holds(cond, item, kind, now) {
   const actual = fieldOf(item, cond.field, kind)
@@ -145,7 +157,7 @@ function holds(cond, item, kind, now) {
     return op === 'newerThan' ? age < value * MINUTE : age > value * MINUTE
   }
   if (cond.field === 'labels') {
-    const want = norm(value)
+    const want = wantOf(cond)
     if (op === 'hasPrefix') return actual.some((l) => norm(l).startsWith(want))
     const has = actual.some((l) => norm(l) === want)
     return op === 'has' ? has : !has
@@ -154,21 +166,22 @@ function holds(cond, item, kind, now) {
   // Text (and the enum fields, compared the same way). An absent field contains nothing, so it
   // holds only for the negative ops.
   const a = typeof actual === 'string' ? norm(actual) : null
+  const w = wantOf(cond)
   switch (op) {
     case 'is':
-      return a !== null && a === norm(value)
+      return a !== null && a === w
     case 'isNot':
-      return a === null || a !== norm(value)
+      return a === null || a !== w
     case 'in':
-      return a !== null && value.some((v) => norm(v) === a)
+      return a !== null && w.includes(a)
     case 'contains':
-      return a !== null && a.includes(norm(value))
+      return a !== null && a.includes(w)
     case 'notContains':
-      return a === null || !a.includes(norm(value))
+      return a === null || !a.includes(w)
     case 'startsWith':
-      return a !== null && a.startsWith(norm(value))
+      return a !== null && a.startsWith(w)
     case 'endsWith':
-      return a !== null && a.endsWith(norm(value))
+      return a !== null && a.endsWith(w)
     default:
       return false
   }
@@ -243,21 +256,32 @@ function optsFor(item, o) {
  *   shows "Jev…"; the item moves once when it comes), else null.
  */
 function placeItem(settings, item, opts = {}) {
-  const o = optsFor(item, opts)
+  return walk(settings, item, optsFor(item, opts)).placement
+}
+
+/**
+ * One pass over the rules: the placement and one step per rule. Both come from the same checks, so
+ * the trace never disagrees with the row (a Jev answer can change between two separate passes).
+ */
+function walk(settings, item, o) {
   const groups = new Set(settings.groups.map((g) => g.id))
   const notes = []
+  const steps = []
   let jev = null
-  for (let i = 0; i < settings.rules.length; i++) {
-    const rule = settings.rules[i]
-    if (!rule.enabled) continue
+  let placement = null
+  settings.rules.forEach((rule, i) => {
+    const step = { rule: i + 1, id: rule.id, name: rule.name || null, group: rule.group }
+    if (placement) return void steps.push({ ...step, result: 'not checked', detail: '' })
+    if (!rule.enabled) return void steps.push({ ...step, result: 'disabled', detail: '' })
     const r = checkRule(rule, item, o)
+    steps.push({ ...step, result: r.result, detail: r.detail })
     if (r.result === 'pending') {
       jev = 'pending'
       notes.push(`rule ${i + 1}: Jev…`)
     } else if (r.result === 'unavailable') notes.push(`rule ${i + 1} skipped: Jev unavailable`)
-    if (r.result !== 'held') continue
+    if (r.result !== 'held') return
     const what = rule.name ? rule.name : r.detail
-    return {
+    placement = {
       group: groups.has(rule.group) ? rule.group : REST,
       rule: i + 1,
       ruleId: rule.id,
@@ -265,30 +289,18 @@ function placeItem(settings, item, opts = {}) {
       jev,
       ...(r.score !== undefined ? { score: r.score } : {}),
     }
-  }
-  return { group: REST, rule: null, ruleId: null, reason: ['no rule', ...notes].join(' · '), jev }
+  })
+  if (!placement) placement = { group: REST, rule: null, ruleId: null, reason: ['no rule', ...notes].join(' · '), jev }
+  return { placement, steps }
 }
 
 /**
  * The full trace for `ccc inbox why`: one line per rule, in order, with what happened:
  * `held`, `failed` (and why), `disabled`, `pending`, `unavailable`, `not checked` (after the placing
- * rule). Same evaluation as `placeItem`, so the trace never disagrees with the row.
+ * rule). Same pass as `placeItem` (`walk`), so the trace never disagrees with the row.
  */
 function traceItem(settings, item, opts = {}) {
-  const o = optsFor(item, opts)
-  const steps = []
-  let placed = false
-  settings.rules.forEach((rule, i) => {
-    const step = { rule: i + 1, id: rule.id, name: rule.name || null, group: rule.group }
-    if (placed) steps.push({ ...step, result: 'not checked', detail: '' })
-    else if (!rule.enabled) steps.push({ ...step, result: 'disabled', detail: '' })
-    else {
-      const r = checkRule(rule, item, o)
-      steps.push({ ...step, result: r.result, detail: r.detail })
-      if (r.result === 'held') placed = true
-    }
-  })
-  const placement = placeItem(settings, item, opts)
+  const { placement, steps } = walk(settings, item, optsFor(item, opts))
   return { placement, steps, text: traceText(steps, placement, settings) }
 }
 
