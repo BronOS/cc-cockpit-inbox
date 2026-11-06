@@ -302,6 +302,8 @@ function createInbox(ctx, opts = {}) {
       badge: d.badge,
       color: d.color,
       label: d.label,
+      // The source's kind (describe()): the page lays a chat row out as place · sender, then the message.
+      kind: d.kind,
       ...extra,
     }
   }

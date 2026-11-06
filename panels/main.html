@@ -42,8 +42,25 @@
          line, left of the badge, centred on it: padding-block 6px + the badge's 1px margin + half its
          18px height = 16px. */
       .inbox-row.cc-unread::before { top: 16px; }
+      /* The first line: the title, then the time column at its right end (every source), so the eye
+         scans the times down one edge. Baseline: the 11px time sits on the title's text line. The
+         unread dot above stays right: the first line is still the badge's line. */
+      .inbox-row .l1 { display: flex; align-items: baseline; gap: var(--cc-space-2); min-width: 0; }
+      .inbox-row .l1 .cc-row-title { flex: 1 1 auto; min-width: 0; }
+      .inbox-row .when { flex: none; font-size: var(--cc-text-s); font-variant-numeric: tabular-nums; color: var(--cc-fg-subtle); }
+      .inbox-row.cc-unread .when { color: var(--cc-accent); }
+      /* A chat row's first line: the place bold, read or not (the dot and the time's accent tell
+         unread), the sender muted at medium weight. Other titles keep the component's unread bold. */
+      .inbox-row .cc-row-title.head { font-weight: 600; }
+      .inbox-row .cc-row-title .sep { font-weight: 400; color: var(--cc-fg-subtle); }
+      .inbox-row .cc-row-title .from { font-weight: 500; color: var(--cc-fg-muted); }
+      .inbox-row .dm { display: inline-block; margin-right: 4px; padding: 0 4px; border: 1px solid var(--cc-border); border-radius: 4px; font-size: 10px; font-weight: 700; line-height: 14px; color: var(--cc-fg-subtle); vertical-align: 1px; }
+      /* Its message: normal weight, up to two lines. */
+      .inbox-row .msg { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-weight: 400; color: var(--cc-fg); }
       .inbox-row .cc-row-meta .mark { color: var(--cc-accent); }
+      /* The parts of the meta joined by dots; the first part has none before it (a chat row's meta starts with a mark or the reason). */
       .inbox-row .cc-row-meta .mark::before, .inbox-row .cc-row-meta .reason::before { content: ' · '; color: var(--cc-fg-muted); }
+      .inbox-row .cc-row-meta > :first-child::before { content: none; }
       .inbox-row .cc-row-meta .reason { color: var(--cc-fg-subtle); }
       .inbox-row .preview { overflow: hidden; font-size: var(--cc-text-s); text-overflow: ellipsis; white-space: nowrap; }
       .inbox-row .labels { display: flex; flex-wrap: wrap; gap: var(--cc-space-1); margin-top: 2px; }

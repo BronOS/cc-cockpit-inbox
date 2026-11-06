@@ -132,13 +132,32 @@ function onRowClick(li, key, canOpen) {
   })
 }
 
+/** The first line: the title (or a chat row's place · sender) and the time column at its right end. */
+function firstLineEl(m) {
+  let title
+  if (m.head) {
+    const h = m.head
+    title = el('span', { class: 'cc-row-title head', title: [h.place, h.thread, h.from].filter(Boolean).join(' · ') })
+    if (h.dm) title.append(el('span', { class: 'dm', text: 'DM', title: 'A direct message' }))
+    title.append(document.createTextNode(h.place))
+    if (h.thread) title.append(el('span', { class: 'sep', text: ' › ' }), document.createTextNode(h.thread))
+    if (h.from) title.append(el('span', { class: 'sep', text: ' · ' }), el('span', { class: 'from', text: h.from }))
+  } else title = el('span', { class: 'cc-row-title', text: m.title, title: m.title })
+  return el('div', { class: 'l1' }, title, m.when ? el('span', { class: 'when', text: m.when, title: m.whenTitle }) : null)
+}
+
 function rowEl(r) {
   const m = rowModel(r, Date.now())
   const li = rowShell(m.key, m, m.unread ? 'cc-unread' : '')
-  const meta = el('span', { class: 'cc-row-meta' }, m.meta)
+  // The meta text in a span of its own: the CSS drops the dot before the first part, and a bare text
+  // node is no :first-child, so a mark after it would lose its dot.
+  const meta = el('span', { class: 'cc-row-meta' }, m.meta ? el('span', { text: m.meta }) : null)
   for (const mark of m.marks) meta.append(el('span', { class: 'mark', text: mark }))
   if (m.reason) meta.append(el('span', { class: 'reason', text: m.reason }))
-  const main = el('div', { class: 'cc-row-main' }, el('span', { class: 'cc-row-title', text: m.title, title: m.title }), meta)
+  const main = el('div', { class: 'cc-row-main' }, firstLineEl(m))
+  // A chat row: the message, then the meta (marks, reason). Others: the meta (from · place), then the preview.
+  if (m.message) main.append(el('span', { class: 'msg', text: m.message, title: m.message }))
+  if (m.meta || m.marks.length || m.reason) main.append(meta)
   if (m.preview) main.append(el('span', { class: 'preview cc-muted', text: m.preview }))
   if (m.labels.length) {
     const labels = el('span', { class: 'labels' })

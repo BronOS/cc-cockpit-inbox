@@ -75,6 +75,24 @@ test('two sources, then a third: each placed by the default rules, newest first;
   inbox.dispose()
 })
 
+test('a chat row: the host adds the source kind for the layout, the title stays the message rules read', async () => {
+  // The panel draws a chat row as place · sender, then the message; that is the page's layout only.
+  // The item's title is still what `title contains` sees (Inbox rules here, Autopilot's the same field).
+  const msg = 'Can you look at the failover alerts before the call?'
+  const chat = chatFeed([item2('spaces/S/threads/T', { title: msg, preview: 'the second spike is at 08:12', extra: { from: { name: 'Ann Example' }, to: 'group', place: { kind: 'channel', name: 'Alerts' } } })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chat } })
+  await inbox.first
+  await inbox.saveSettings({ ...S.defaults(), rules: [{ id: 'failover', enabled: true, group: 'now', when: [{ field: 'title', op: 'contains', value: 'failover alerts' }] }, ...S.defaults().rules] })
+  await settle()
+  assert.deepEqual(groups(ctx), { now: ['spaces/S/threads/T'] })
+  const r = rowOf(ctx, 'spaces/S/threads/T')
+  assert.equal(r.title, msg)
+  assert.equal(r.kind, 'chat')
+  assert.equal(r.reason, 'rule 1: title contains failover alerts')
+  assert.equal(rowOf(ctx, 'spaces/S/threads/T').preview, 'the second spike is at 08:12')
+  inbox.dispose()
+})
+
 test('a source leaving takes its rows and its line with it', async () => {
   const { ctx, inbox } = setup({ feeds: { 'bronos.chat': chatFeed([item2('c1')]), 'bronos.mail': mailFeed([item2('m1')]) } })
   await inbox.first

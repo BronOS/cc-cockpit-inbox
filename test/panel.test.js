@@ -38,25 +38,76 @@ const source = (pluginId, o = {}) => ({ pluginId, label: pluginId.slice(2), badg
 const group = (id, rows, o = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), collapsed: false, badge: true, count: rows.length, unread: 0, rows, ...o })
 const stateOf = (o = {}) => ({ type: 'state', version: 2, now: NOW, groups: [], sources: [], done: { count: 0, rows: [] }, search: null, undo: null, agenda: 'top', ...o })
 
-test('rows: badge, title, from · place · time, the preview first line, three labels, the reason', () => {
-  const m = R.rowModel(row('c1', { preview: 'hello there\nsecond line', labels: ['alert', 'mention:all', 'jira:PROJ-12', 'fourth'] }), NOW)
+test('rows: badge, title, from · place (no time), the preview first line, three labels, the reason, the time column', () => {
+  const m = R.rowModel(row('c1', { kind: 'mail', preview: 'hello there\nsecond line', labels: ['alert', 'mention:all', 'jira:PROJ-12', 'fourth'] }), NOW)
   assert.equal(m.badge, 'CHAT')
   assert.equal(m.color, 'green')
   assert.equal(m.source, 'Chat')
   assert.equal(m.title, 'T c1')
-  assert.equal(m.meta, 'Ann Example · general · 4m')
+  assert.equal(m.head, null, 'not a chat source: no chat head')
+  assert.equal(m.message, '')
+  assert.equal(m.meta, 'Ann Example · general')
+  assert.equal(m.when, '4m')
+  assert.equal(m.whenTitle, 'Tue 3 Nov 2026, 13:38')
   assert.equal(m.preview, 'hello there')
   assert.deepEqual(m.labels, ['alert', 'mention:all', 'jira:PROJ-12'])
   assert.equal(m.reason, 'rule 4: sourceKind is chat')
   assert.equal(m.unread, true)
   assert.equal(m.canOpen, true)
   // A project with a status, an address-only sender, read state null (no read state: not unread).
-  const j = R.rowModel(row('PROJ-12', { from: { address: 'lead@example.com' }, place: { kind: 'project', name: 'PROJ', status: 'In review' }, read: null, time: NOW - 3 * HOUR }), NOW)
-  assert.equal(j.meta, 'lead@example.com · PROJ · In review · 3h')
+  const j = R.rowModel(row('PROJ-12', { kind: 'issues', from: { address: 'lead@example.com' }, place: { kind: 'project', name: 'PROJ', status: 'In review' }, read: null, time: NOW - 3 * HOUR }), NOW)
+  assert.equal(j.meta, 'lead@example.com · PROJ · In review')
+  assert.equal(j.when, '3h')
   assert.equal(j.unread, false)
   // Nothing but a title.
   const bare = R.rowModel({ key: 'k', title: 'Only', actions: [] }, NOW)
-  assert.deepEqual([bare.meta, bare.preview, bare.labels, bare.reason, bare.badge, bare.color, bare.canOpen], ['', '', [], '', 'FEED', 'grey', false])
+  assert.deepEqual([bare.meta, bare.preview, bare.labels, bare.reason, bare.badge, bare.color, bare.canOpen, bare.when, bare.whenTitle], ['', '', [], '', 'FEED', 'grey', false, '', ''])
+})
+
+test('a mail row: the subject, the sender and folder in the meta, the snippet, the time on the right', () => {
+  const m = R.rowModel(row('t1', { kind: 'mail', src: 'mail', badge: 'MAIL', title: 'Release 1.7.10 upgrade', preview: 'Good morning team, it is ready for testing.', from: { name: 'Ann Example', address: 'ann@example.com' }, place: { kind: 'folder', name: 'Inbox' }, time: NOW - HOUR, reason: 'rule 5: sourceKind is mail' }), NOW)
+  assert.deepEqual([m.title, m.head, m.meta, m.preview, m.when, m.reason], ['Release 1.7.10 upgrade', null, 'Ann Example · Inbox', 'Good morning team, it is ready for testing.', '1h', 'rule 5: sourceKind is mail'])
+  assert.deepEqual(m.marks, [], 'mentionsMe is a mark of chat rows only (Jira says it with its own label)')
+})
+
+test('a chat row: place · sender on the first line, the message under it, the meta without them', () => {
+  const chat = (o) => R.rowModel(row('spaces/S', { kind: 'chat', ...o }), NOW)
+  // A space (flat): bronos.chat's title is the space, the place too; the message is the preview.
+  const sp = chat({ title: 'Acme Team', preview: 'Thank you', from: { name: 'Max Example' }, place: { kind: 'channel', name: 'Acme Team' }, to: 'group' })
+  assert.deepEqual(sp.head, { dm: false, place: 'Acme Team', thread: '', from: 'Max Example' })
+  assert.equal(sp.message, 'Thank you')
+  assert.equal(sp.meta, '', 'where and who are in the head, not repeated in the meta')
+  assert.equal(sp.preview, '', 'the message is not drawn twice')
+  assert.equal(sp.reason, 'rule 4: sourceKind is chat')
+  assert.equal(sp.title, 'Acme Team', 'the model keeps the title as sent')
+  // A mention is a mark, before the reason.
+  assert.deepEqual(chat({ mentionsMe: true }).marks, ['mentions you'])
+  // A thread whose latest is a reply: its start (the title) is the thread's name.
+  const th = chat({ title: '@Oleg can you look at the failover alerts?', preview: 'the second spike is at 08:12', from: { name: 'Ann Example' }, place: { kind: 'channel', name: 'Alerts' }, to: 'group' })
+  assert.deepEqual(th.head, { dm: false, place: 'Alerts', thread: '@Oleg can you look at the failover alerts?', from: 'Ann Example' })
+  assert.equal(th.message, 'the second spike is at 08:12')
+  // A thread whose start is the latest message (the title cut with an ellipsis): no thread name, it would repeat the message.
+  const one = chat({ title: '@Oleg can you look at the failover…', preview: '@Oleg can you look at the failover alerts before the call?', place: { kind: 'channel', name: 'Alerts' }, to: 'group' })
+  assert.equal(one.head.thread, '')
+  assert.equal(one.message, '@Oleg can you look at the failover alerts before the call?')
+  // No preview: the title is the message.
+  const bare = chat({ title: 'Lunch?', preview: undefined, place: { kind: 'channel', name: 'Acme Team' } })
+  assert.equal(bare.message, 'Lunch?')
+  assert.equal(bare.head.thread, '')
+  // No place: the title leads, the sender not said twice.
+  assert.deepEqual(chat({ title: 'Ann Example', place: undefined, from: { name: 'Ann Example' } }).head, { dm: false, place: 'Ann Example', thread: '', from: '' })
+})
+
+test('a DM row: the person with a DM tag (to: direct), never "Direct message" or "you"', () => {
+  const dm = (o) => R.rowModel(row('spaces/D', { kind: 'chat', to: 'direct', place: { kind: 'channel', name: 'Direct message' }, ...o }), NOW)
+  // bronos.chat: the DM's title is the other person; the latest sender may be the person ("you").
+  const a = dm({ title: 'Bob Example', preview: 'ok, merged', from: { name: 'you' } })
+  assert.deepEqual(a.head, { dm: true, place: 'Bob Example', thread: '', from: '' })
+  assert.equal(a.message, 'ok, merged')
+  assert.equal(a.meta, '')
+  // A source whose DM title is the message itself: the sender is the person.
+  const b = dm({ title: 'ok, merged', preview: undefined, from: { name: 'Bob Example' } })
+  assert.deepEqual([b.head.place, b.message], ['Bob Example', 'ok, merged'])
 })
 
 test('row actions: the source actions without open, then Done and Snooze; marks for back and search hits', () => {
@@ -235,11 +286,38 @@ test('the snooze menu: v1 choices, the afternoon one says tomorrow once passed',
   assert.equal(R.snoozeChoices(Date.parse('2026-11-03T15:00:00+01:00'))[1].label, 'Tomorrow afternoon, 14:00')
 })
 
-test('ages and clocks', () => {
-  assert.equal(R.ageText(NOW - 30 * 1000, NOW), 'now')
-  assert.equal(R.ageText(NOW - 3 * HOUR, NOW), '3h')
-  assert.equal(R.ageText(NOW - 50 * HOUR, NOW), '2d')
-  assert.equal(R.ageText(null, NOW), '')
+test('the time column: now, minutes, hours the same day, Yesterday, the weekday, the date, another year', () => {
+  // NOW is Tue 3 Nov 2026, 13:42 in Berlin (process TZ above): every boundary in local time.
+  const at = (s) => Date.parse(s)
+  const W = (s) => R.whenText(at(s), NOW)
+  assert.equal(R.whenText(NOW, NOW), 'now')
+  assert.equal(R.whenText(NOW - 59 * 1000, NOW), 'now')
+  assert.equal(R.whenText(NOW - MIN, NOW), '1m')
+  assert.equal(R.whenText(NOW - 59 * MIN, NOW), '59m')
+  assert.equal(R.whenText(NOW - HOUR, NOW), '1h')
+  assert.equal(W('2026-11-03T00:00:00+01:00'), '13h', 'local midnight is still today')
+  assert.equal(W('2026-11-02T23:59:00+01:00'), 'Yesterday', 'one minute before local midnight')
+  assert.equal(W('2026-11-02T00:00:00+01:00'), 'Yesterday')
+  assert.equal(W('2026-11-01T23:59:00+01:00'), 'Sun')
+  assert.equal(W('2026-10-28T00:00:00+01:00'), 'Wed', '6 days back: a weekday')
+  assert.equal(W('2026-10-27T23:59:00+01:00'), '27 Oct', '7 days back: the date (the same weekday would repeat)')
+  // Over the DST change (25 Oct, a 25 hour day): still counted in calendar days.
+  assert.equal(W('2026-10-25T01:00:00+02:00'), '25 Oct')
+  assert.equal(R.whenText(at('2026-10-29T12:00:00+01:00'), at('2026-10-30T00:30:00+01:00')), 'Yesterday', 'at 00:30 a message of noon is Yesterday, not 12h')
+  assert.equal(R.whenText(at('2026-10-29T23:50:00+01:00'), at('2026-10-30T00:30:00+01:00')), '40m')
+  assert.equal(W('2026-01-01T00:00:00+01:00'), '1 Jan')
+  assert.equal(W('2025-12-31T23:59:00+01:00'), '31 Dec 2025')
+  assert.equal(R.whenText(at('2025-11-03T10:00:00+01:00'), NOW), '3 Nov 2025')
+  // A time ahead (a clock a little off): now today, else its date.
+  assert.equal(R.whenText(NOW + 5 * MIN, NOW), 'now')
+  assert.equal(W('2026-11-05T10:00:00+01:00'), '5 Nov')
+  for (const bad of [null, undefined, NaN, Infinity, '1']) assert.equal(R.whenText(bad, NOW), '')
+})
+
+test('the time column\'s hover and the clocks', () => {
+  assert.equal(R.fullTimeText(Date.parse('2026-11-06T09:21:00+01:00')), 'Fri 6 Nov 2026, 09:21')
+  assert.equal(R.fullTimeText(Date.parse('2025-03-01T00:05:00+01:00')), 'Sat 1 Mar 2025, 00:05')
+  assert.equal(R.fullTimeText(null), '')
   assert.equal(R.clockText(NOW), '13:42')
 })
 

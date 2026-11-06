@@ -18,7 +18,10 @@ Plugins page warns about it).
   with its count. Inside a group the newest item is first.
 - **Rows**: the source's badge, the title, who and where, the first line of the preview, up to three
   labels, and why the row is where it is ("rule 4: sourceKind is chat", "rule 2: Jev 0.86", "no
-  rule"). Actions sit on the right on hover: the source's own, then Done and Snooze.
+  rule"). The time sits at the right end of the first line ("39m", "Yesterday", "Mon", "3 Nov"; the
+  full date on hover). A chat row reads "space · sender" (a DM: the person, tagged DM), then the
+  message on up to two lines; only the layout changed, so rules on `title` match what they did.
+  Actions sit on the right on hover: the source's own, then Done and Snooze.
 - **Source lines** above the groups when a source is signed out or failed (its last list stays,
   marked stale), or when it refused or cut items.
 - **Search** (`/`) over title, preview, sender, place and labels of every item, Rest and Done

@@ -19,14 +19,44 @@ function colorName(c) {
   return COLORS.includes(c) ? c : 'grey'
 }
 
-/** "now", "4m", "2h", "3d" since `at`; "" without a time. */
-function ageText(at, now) {
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** Local calendar days from `at` to `now` (0 the same day, 1 yesterday). Midnights, rounded: a DST day has 23 or 25 hours. */
+function dayDiff(at, now) {
+  const a = new Date(at)
+  const b = new Date(now)
+  const mid = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  return Math.round((mid(b) - mid(a)) / 86400000)
+}
+
+/**
+ * The time column of a row, short, in local time: "now", "5m", "39m", "3h" (the same day),
+ * "Yesterday", the weekday for the last week ("Mon": a name that cannot repeat within 7 days),
+ * "3 Nov" this year, "3 Nov 2025" another. Hours only within the same calendar day: at 00:30 a
+ * message of 22:00 is "Yesterday", which is how a person files it, not "2h". A time ahead of `now`
+ * (a clock off by a little) is "now" on the same day, else its date. "" without a time.
+ */
+function whenText(at, now) {
   if (typeof at !== 'number' || !Number.isFinite(at)) return ''
+  const days = dayDiff(at, now)
+  const d = new Date(at)
+  const date = () => `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() === new Date(now).getFullYear() ? '' : ` ${d.getFullYear()}`}`
+  if (at > now) return days === 0 ? 'now' : date()
   const m = Math.floor((now - at) / 60000)
   if (m < 1) return 'now'
   if (m < 60) return `${m}m`
-  if (m < 24 * 60) return `${Math.floor(m / 60)}h`
-  return `${Math.floor(m / (24 * 60))}d`
+  if (days === 0) return `${Math.floor(m / 60)}h`
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return WEEKDAYS[d.getDay()]
+  return date()
+}
+
+/** The `title` (hover) of the time column: "Fri 6 Nov 2026, 09:21", local. "" without a time. */
+function fullTimeText(at) {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return ''
+  const d = new Date(at)
+  return `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${clockText(at)}`
 }
 
 /** `14:05` local. */
@@ -58,14 +88,54 @@ function placeText(place) {
   return name && status ? `${name} · ${status}` : name || status
 }
 
+/** `title` without a trailing ellipsis (a source's cut), for a prefix test. */
+const uncut = (s) => s.replace(/…$/, '').trim()
+
 /**
- * What one row draws: the source badge, the title, the meta line (from · place · time), the
- * preview's first line, at most 3 labels, the rule's reason and the marks (back, done, snoozed in a
- * search). `actions` are the source's (the host left `open` out: it is the row click), then Done and
- * Snooze, which are Inbox's own (`own: true`); a done or snoozed search hit has neither.
+ * The first line of a chat row: `{ dm, place, thread, from }` (the mockup "Chat rows"). The place
+ * (the space) leads, bold, then the sender, muted; the message itself goes on the second line. The
+ * feed item is left as the source sent it: its `title` is still what rules (`title contains …`)
+ * and Autopilot read, this only lays the fields out.
+ * - A DM is `to: 'direct'` (the contract's "DM / group chat or space"; bronos.chat sets it from
+ *   the conversation kind, and its `place.name` is then the words "Direct message", so the place
+ *   says nothing). Only the person shows, with a DM tag. The person is the title (Chat's DM title
+ *   is the other person), unless the title is the message itself, then the sender: the sender of
+ *   the latest message is "you" when the person wrote last, which would name the wrong one.
+ * - A thread: bronos.chat's title of a thread is its start's first line, its place the space. When
+ *   the title is neither the place nor the start of the message shown (a reply is the latest), it
+ *   is the thread's name: "Space › thread". When the start is the latest message, the title would
+ *   only repeat the second line, so it is left out.
+ */
+function chatHead(r, message) {
+  const title = str(r.title)
+  const from = fromText(r.from)
+  if (r.to === 'direct') {
+    const person = title && title !== message ? title : from || title
+    return { dm: true, place: person, thread: '', from: '' }
+  }
+  const place = r.place && typeof r.place === 'object' ? str(r.place.name) : ''
+  const t = uncut(title)
+  const thread = t && place && title !== place && !message.startsWith(t) ? title : ''
+  return { dm: false, place: place || title, thread, from: from && from !== (place || title) ? from : '' }
+}
+
+/**
+ * What one row draws: the source badge, the first line, the time column, the meta line, the
+ * preview, at most 3 labels, the rule's reason and the marks (back, done, snoozed in a search).
+ * - Every row: the time on the right end of the first line, short (`when`, whenText), the full date
+ *   and time for its hover (`whenTitle`); it is no longer in the meta.
+ * - A chat row (the source's kind is `chat`, sent by the host as `kind`): `head` is the first line
+ *   (chatHead), `message` the second (the preview, else the title), clamped to 2 lines by the page;
+ *   the meta holds only the marks and the reason, since the place and the sender are in the head.
+ *   An @mention is a mark ("mentions you").
+ * - Any other row: the title, then the meta (from · place), then the preview's first line.
+ * `actions` are the source's (the host left `open` out: it is the row click), then Done and Snooze,
+ * which are Inbox's own (`own: true`); a done or snoozed search hit has neither.
  */
 function rowModel(r, now) {
+  const chat = r.kind === 'chat'
   const marks = []
+  if (chat && r.mentionsMe === true) marks.push('mentions you')
   if (r.back) marks.push('back: new activity')
   if (r.done) marks.push('done')
   if (r.snoozed) marks.push('snoozed')
@@ -73,14 +143,19 @@ function rowModel(r, now) {
   const sourceActions = arr(r.actions)
     .filter((a) => a && typeof a.id === 'string' && a.id !== 'open')
     .map((a) => ({ id: a.id, label: str(a.label) || a.id, own: false }))
+  const message = chat ? firstLine(r.preview) || str(r.title) : ''
   return {
     key: r.key,
     badge: str(r.badge) || 'FEED',
     color: colorName(r.color),
     source: str(r.label) || str(r.source),
     title: str(r.title),
-    meta: [fromText(r.from), placeText(r.place), ageText(r.time, now)].filter(Boolean).join(' · '),
-    preview: firstLine(r.preview),
+    head: chat ? chatHead(r, message) : null,
+    message,
+    meta: chat ? '' : [fromText(r.from), placeText(r.place)].filter(Boolean).join(' · '),
+    preview: chat ? '' : firstLine(r.preview),
+    when: whenText(r.time, now),
+    whenTitle: fullTimeText(r.time),
     labels: arr(r.labels).filter((l) => typeof l === 'string' && l).slice(0, LABELS_SHOWN),
     reason: str(r.reason),
     marks,
@@ -340,7 +415,9 @@ if (typeof module !== 'undefined' && module.exports) {
     COLORS,
     SNOOZE_TIMES,
     colorName,
-    ageText,
+    whenText,
+    fullTimeText,
+    chatHead,
     clockText,
     firstLine,
     fromText,
