@@ -37,6 +37,11 @@
       /* A row: the badge on the first line, the text in lines below each other. */
       .inbox-row { align-items: flex-start; padding-block: 6px; cursor: pointer; }
       .inbox-row > .cc-badge { flex: none; min-width: 40px; justify-content: center; margin-top: 1px; font-weight: 600; letter-spacing: .03em; }
+      /* The component's unread dot sits at the row's vertical middle, which on a row of three or four
+         lines lands beside the preview and reads as belonging to nothing. Here it goes on the first
+         line, left of the badge, centred on it: padding-block 6px + the badge's 1px margin + half its
+         18px height = 16px. */
+      .inbox-row.cc-unread::before { top: 16px; }
       .inbox-row .cc-row-meta .mark { color: var(--cc-accent); }
       .inbox-row .cc-row-meta .mark::before, .inbox-row .cc-row-meta .reason::before { content: ' · '; color: var(--cc-fg-muted); }
       .inbox-row .cc-row-meta .reason { color: var(--cc-fg-subtle); }
