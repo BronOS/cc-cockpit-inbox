@@ -22,3 +22,6 @@ The rules that matter most:
 - Everything a source sends is validated as untrusted input; a bad item is left out and counted.
 - The closest real model for an issues or code-review source (a Forgejo plugin, say) is the Jira
   plugin, repo `BronOS/cc-cockpit-jira`: its `dist/host.js` (`inbox-feed` section) and `dist/lib/feed.js`.
+- A code-host source (GitHub, Forgejo, Gitea, GitLab) follows the shared item convention, so one set of
+  Inbox rules works for every host: `docs/item-convention.md` in `BronOS/cc-cockpit-github` (ids, labels,
+  actions, overlay type, rule hints); that plugin is its reference implementation.
