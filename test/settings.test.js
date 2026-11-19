@@ -38,6 +38,20 @@ test('junk, a v2 value without lists: the defaults (agenda kept when valid)', ()
   assert.deepEqual(S.readSettings({ version: 1, calendar: { position: 'bottom' } }), { ...S.defaults(), agenda: 'bottom' })
 })
 
+test('closeOnAction: on by default; only false is off, absent and junk read as on; a save refuses a non-boolean', () => {
+  assert.equal(S.defaults().closeOnAction, true)
+  assert.equal(S.readSettings(v2()).closeOnAction, true, 'a set stored before the field existed')
+  assert.equal(S.readSettings(v2({ closeOnAction: false })).closeOnAction, false)
+  for (const junk of [true, 'false', 0, null, {}]) assert.equal(S.readSettings(v2({ closeOnAction: junk })).closeOnAction, true, String(junk))
+  // Kept when the lists are bad and the defaults stand in for them, like the agenda.
+  assert.equal(S.readSettings({ version: 2, groups: 'no', rules: [], agenda: 'off', closeOnAction: false }).closeOnAction, false)
+  const d = S.defaults()
+  const { closeOnAction: _, ...without } = d
+  assert.deepEqual(S.checkSettings(without), { ok: true, settings: d }, 'an import without the field: on')
+  assert.equal(S.checkSettings({ ...d, closeOnAction: false }).settings.closeOnAction, false)
+  assert.deepEqual(S.checkSettings({ ...d, closeOnAction: 'no' }), { ok: false, reason: 'closeOnAction must be true or false', path: 'closeOnAction' })
+})
+
 test('migration from 0.1.0: everything dropped but the calendar position', () => {
   const v1 = {
     sources: { 'bronos.chat': { on: false, weight: 40 } },
@@ -51,7 +65,8 @@ test('migration from 0.1.0: everything dropped but the calendar position', () =>
   }
   const s = S.readSettings(v1)
   assert.deepEqual(s, { ...S.defaults(), agenda: 'bottom' })
-  assert.deepEqual(Object.keys(s).sort(), ['agenda', 'groups', 'rules', 'version'])
+  assert.deepEqual(Object.keys(s).sort(), ['agenda', 'closeOnAction', 'groups', 'rules', 'version'])
+  assert.equal(s.closeOnAction, true, 'the default: on')
   for (const [pos, agenda] of [['top', 'top'], ['bottom', 'bottom'], ['off', 'off'], ['inline', 'top'], ['beside', 'top'], [undefined, 'top'], ['weird', 'top']]) {
     assert.equal(S.readSettings({ calendar: { position: pos } }).agenda, agenda, String(pos))
   }

@@ -164,7 +164,7 @@ function setTitle(set, own) {
   return own ? 'global rules (not in effect here: this project has its own set)' : 'global rules (this project uses the global set)'
 }
 
-/** `ccc inbox rules` (and `groups`): the header, the groups, the numbered rules, the agenda. */
+/** `ccc inbox rules` (and `groups`): the header, the groups, the numbered rules, the agenda, the overlay close. */
 function formatSet(settings, set, own) {
   const out = [`Inbox ${setTitle(set, own)}`, '', 'Groups, in order:']
   settings.groups.forEach((g, i) => out.push(`  ${groupLine(g, i + 1)}`))
@@ -172,6 +172,7 @@ function formatSet(settings, set, own) {
   if (!settings.rules.length) out.push('  (none: everything goes to Rest)')
   settings.rules.forEach((r, i) => out.push(`  ${ruleLine(r, i + 1, settings)}`))
   out.push('', `Agenda: ${settings.agenda}`)
+  out.push(`Close the item after Mark read or Done: ${settings.closeOnAction ? 'on' : 'off'}`)
   return `${out.join('\n')}\n`
 }
 

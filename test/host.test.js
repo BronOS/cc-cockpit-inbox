@@ -235,6 +235,26 @@ test('Done via the overlay button: only for items Inbox shows, closes the overla
   inbox.dispose()
 })
 
+test('closeOnAction off: Done (Inbox) does not close, and the open tells the source; the set in force decides, at click time', async () => {
+  const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') }), item2('m2', { actions: actions('open', 'markRead') })])
+  const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
+  await inbox.first
+  await settle()
+  const [b] = await ctx.buttonsFor({ source: 'bronos.mail', id: 'm1' })
+  // Turned off after the overlay opened: the click reads the setting now.
+  await inbox.saveSettings({ ...S.defaults(), closeOnAction: false })
+  await settle()
+  assert.equal(await b.run(), undefined, 'done, the overlay stays')
+  assert.deepEqual(ctx.lastState().done.rows.map((r) => r.id), ['m1'])
+  // The overlay's data (written by its opener) cannot turn it back on.
+  const [b2] = await ctx.buttonsFor({ source: 'bronos.mail', id: 'm2', closeOnAction: true })
+  assert.equal(await b2.run(), undefined)
+  // Opened from the Done view (it stays done): the source hears the setting in force.
+  await ctx.sendPanel({ type: 'open', key: 'bronos.mail\u0000m2' })
+  assert.deepEqual(sourceCalls(mail).at(-1), ['act', 'm2', 'open', { closeOnAction: false }])
+  inbox.dispose()
+})
+
 test('Done from the row and `ccc inbox done` make no source call; undo and Back to Inbox bring it back', async () => {
   const mail = mailFeed([item2('m1', { actions: actions('open', 'markRead') }), item2('m2', { time: NOW - 2 * HOUR, actions: actions('open', 'markRead') })])
   const { ctx, inbox } = setup({ feeds: { 'bronos.mail': mail } })
@@ -309,7 +329,7 @@ test("row actions go to act(id, action) on the item's own source; a refusal show
   assert.deepEqual(rowOf(ctx, 'm1').actions, [{ id: 'markRead', label: 'Mark read' }])
   await ctx.sendPanel({ type: 'open', key })
   await ctx.sendPanel({ type: 'act', key, action: 'markRead' })
-  assert.deepEqual(sourceCalls(mail), [['act', 'm1', 'open'], ['act', 'm1', 'markRead']])
+  assert.deepEqual(sourceCalls(mail), [['act', 'm1', 'open', { closeOnAction: true }], ['act', 'm1', 'markRead']], 'the close setting goes with open only')
   assert.deepEqual(sourceCalls(chat), [])
   mail.actReply = { ok: false, message: 'Google refused the change' }
   await ctx.sendPanel({ type: 'act', key, action: 'markRead' })
@@ -452,7 +472,7 @@ test('an action that hangs fails at the call limit and never holds the other sou
   await ctx.sendPanel({ type: 'act', key: rowOf(ctx, 'm1').key, action: 'markRead' })
   assert.match(ctx.posts.at(-1).text, /failed: Mail markRead did not answer/)
   await ctx.sendPanel({ type: 'open', key: rowOf(ctx, 'c1').key })
-  assert.deepEqual(sourceCalls(chat), [['act', 'c1', 'open']])
+  assert.deepEqual(sourceCalls(chat), [['act', 'c1', 'open', { closeOnAction: true }]])
   inbox.dispose()
 })
 

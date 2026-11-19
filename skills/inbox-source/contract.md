@@ -32,7 +32,8 @@ against that code by a test; if the two differ, the code wins.)
   one of the item's current actions. The caller is another plugin: check that `id` is one of your
   items and `action` is in that item's `actions`, else refuse. Reflect the result with an `item` or
   `gone` event; Inbox never changes the item itself. Answer within 10 s (Inbox gives each call 10 s):
-  for `open`, resolve once the overlay has started, not when it closes.
+  for `open`, resolve once the overlay has started, not when it closes. Inbox 0.2.7+ passes a third
+  argument with `open` only: `{ closeOnAction: boolean }` (see "The item in an overlay").
 
 ## Events (`ctx.services.emit('inbox-feed', event, data)`)
 
@@ -130,6 +131,11 @@ Rules the Inbox and the app rely on:
   untrusted): only your own plugin id, or the reviewer plugin you handed the item to
   (`ctx.services.provider('reviewer')`), may get your item buttons. Another plugin opening an overlay
   that names your item gets none. A `run` that fails should throw after showing the error in your panel.
+- Close after Mark read and Done: when `act(id, 'open', opts)` has `opts.closeOnAction === false`, add
+  `closeOnAction: false` to the overlay's type data (`{ source, id, closeOnAction: false }`); a button's
+  `run` returns `{ close: true }` after a successful Mark read or Done unless `info.type.data.closeOnAction
+  === false`. Anything else (absent, an older Inbox, an open from your own panel, junk) means close. Mark
+  unread never closes, and a failed action throws and stays open.
 - `handle.onDiscuss` supplies the item's text for "Discuss with Claude".
 
 ## Skeleton of a source host

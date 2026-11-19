@@ -60,6 +60,7 @@ test('rules: the global set with its groups, numbered rules and agenda, named as
     '  6. on: sourceKind is issues → Jira [id jira]',
     '',
     'Agenda: top',
+    'Close the item after Mark read or Done: on',
     '',
   ])
   assert.equal((await ctx.runCli(['rules', 'list'])).stdout, r.stdout)
@@ -186,6 +187,28 @@ test('a refused edit stores nothing and names the place, as a JSON path and by p
   for (const [argv, stderr] of cases) assert.deepEqual(await ctx.runCli(argv), { stderr, code: 1 }, argv.join(' '))
   assert.deepEqual(await ctx.appStorage.get(S.KEY), before)
   assert.deepEqual(inbox.settings(), S.defaults())
+  inbox.dispose()
+})
+
+test('closeOnAction: CLI edits keep it; export shows it; an import without it is on, with false it is off', async () => {
+  const ctx = setup()
+  await S.saveSettings(ctx.appStorage, { ...S.defaults(), closeOnAction: false })
+  const inbox = await start(ctx)
+  await ctx.runCli(['rules', 'disable', '1'])
+  await ctx.runCli(['groups', 'add', 'Later'])
+  await ctx.runCli(['rules', 'add', lead()])
+  assert.equal((await ctx.appStorage.get(S.KEY)).closeOnAction, false, 'every edit builds the whole set: the setting stays')
+  assert.match((await ctx.runCli(['rules'])).stdout, /\nClose the item after Mark read or Done: off\n$/)
+  const exported = JSON.parse((await ctx.runCli(['rules', 'export'])).stdout)
+  assert.equal(exported.closeOnAction, false)
+  delete exported.closeOnAction
+  await ctx.runCli(['rules', 'import', '-'], JSON.stringify(exported))
+  assert.equal((await ctx.appStorage.get(S.KEY)).closeOnAction, true, 'a set from before the field: on')
+  await ctx.runCli(['rules', 'import', '-'], JSON.stringify({ ...exported, closeOnAction: false }))
+  assert.equal((await ctx.appStorage.get(S.KEY)).closeOnAction, false)
+  const r = await ctx.runCli(['rules', 'import', '-'], JSON.stringify({ ...exported, closeOnAction: 'off' }))
+  assert.match(r.stderr, /closeOnAction must be true or false/)
+  assert.equal((await ctx.appStorage.get(S.KEY)).closeOnAction, false, 'a refused import stores nothing')
   inbox.dispose()
 })
 

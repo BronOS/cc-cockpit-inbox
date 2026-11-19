@@ -291,6 +291,17 @@ function setAgenda(d, agenda) {
   return AGENDA_CHOICES.some((c) => c.value === agenda) ? { ...copy(d), agenda } : d
 }
 
+/** The item overlay's words: the switch and its help (the read-only view shows the same label). */
+const CLOSE_TEXT = Object.freeze({
+  label: 'Close the item after Mark read or Done',
+  help: "Mark read and Done in an item's toolbar (the source's, and Inbox's Done) close it. Mark unread keeps it open. A source older than this setting closes on Done only.",
+})
+
+/** Whether Mark read and Done close the item's overlay (absent, as in a set from before the field: on). */
+function setCloseOnAction(d, on) {
+  return { ...copy(d), closeOnAction: on === true }
+}
+
 // ---- inputs ----
 
 /** A condition's value as its input shows it: a list one per line, a boolean or null as its word. */
@@ -398,7 +409,7 @@ function sourceRow(s) {
 const SET_TEXT = Object.freeze({
   switchLabel: 'Use the global rules',
   global: 'These are the global rules, used by every project that has none of its own. Edit them under Settings > Plugins > Inbox, or turn the switch off to give this project its own copy.',
-  project: "This project has its own groups, rules and agenda; the global rules do not apply here. Turn the switch on to drop them and use the global ones again.",
+  project: "This project has its own groups, rules, agenda and item overlay setting; the global rules do not apply here. Turn the switch on to drop them and use the global ones again.",
   confirm: "Discard this project's rules and use the global ones?",
   confirmButton: 'Discard and use the global rules',
 })
@@ -453,6 +464,8 @@ if (typeof module !== 'undefined' && module.exports) {
     setCondition,
     setJev,
     setAgenda,
+    CLOSE_TEXT,
+    setCloseOnAction,
     valueText,
     parseValue,
     parseMin,
