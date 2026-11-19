@@ -1,6 +1,6 @@
 'use strict'
-// The Inbox settings page (docs/design-v2.md "Settings page"): edits a draft of the groups, the rules
-// and the agenda, and sends it whole on Save; dist/host.js checks it (lib/settings.js
+// The Inbox settings page (docs/design-v2.md "Settings page"): edits a draft of the groups, the rules,
+// the agenda and the item overlay's close, and sends it whole on Save; dist/host.js checks it (lib/settings.js
 // `checkSettings`), stores it and answers with what it stored, or refuses it with the reason, shown
 // in the error line. "Test" asks the host how a rule of the draft would place the items Inbox holds
 // now (cached Jev answers only). The sources are read-only. The decisions live in logic.js, pure and
@@ -374,6 +374,18 @@ function agendaCard() {
   return section('Agenda', "Today's events from the calendar plugin, in a strip of the Inbox panel.", settingRow('Position', null, null, box))
 }
 
+function overlayCard() {
+  const sw = el('input', {
+    type: 'checkbox',
+    role: 'switch',
+    id: 'close-on-action',
+    'data-f': 'close-on-action',
+    checked: page.draft.closeOnAction !== false,
+    onchange: () => edit(setCloseOnAction(page.draft, sw.checked)),
+  })
+  return section('Item overlay', null, settingRow(CLOSE_TEXT.label, CLOSE_TEXT.help, 'close-on-action', sw))
+}
+
 // ---- a project's page: the switch, and the global set read-only ----
 
 function askUseGlobal(on) {
@@ -440,6 +452,10 @@ function readonlyAgendaCard(d) {
   return section('Agenda', null, settingRow('Position', null, null, el('span', { text: agendaText(d.agenda) })))
 }
 
+function readonlyOverlayCard(d) {
+  return section('Item overlay', null, settingRow(CLOSE_TEXT.label, null, null, el('span', { text: d.closeOnAction !== false ? 'On' : 'Off' })))
+}
+
 // ---- render ----
 
 function render() {
@@ -466,8 +482,8 @@ function render() {
   if (page.error) error.append(el('div', { class: 'cc-error-line', role: 'alert', text: page.error }))
   const mode = pageMode(page.scope, page.useGlobal)
   if (mode.switch) main.append(setCard())
-  if (mode.editable) main.append(groupsCard(), rulesCard(), sourcesCard(), agendaCard())
-  else main.append(readonlyGroupsCard(page.draft), readonlyRulesCard(page.draft), sourcesCard(), readonlyAgendaCard(page.draft))
+  if (mode.editable) main.append(groupsCard(), rulesCard(), sourcesCard(), agendaCard(), overlayCard())
+  else main.append(readonlyGroupsCard(page.draft), readonlyRulesCard(page.draft), sourcesCard(), readonlyAgendaCard(page.draft), readonlyOverlayCard(page.draft))
   if (focus) {
     const n = document.querySelector(`[data-f="${CSS.escape(focus)}"]`)
     // Scrolled to only when it moved there: a redraw keeps the view where it was.

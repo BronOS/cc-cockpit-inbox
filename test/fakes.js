@@ -64,8 +64,9 @@ function fakeFeedV2(describe, items = [], opts = {}) {
         }
         return answer
       },
-      async act(id, action) {
-        feed.calls.push(['act', id, action])
+      async act(id, action, ...opts) {
+        // A third argument (the open's `{ closeOnAction }`) is recorded only when one was passed.
+        feed.calls.push(['act', id, action, ...opts])
         if (feed.throwOn === 'act') throw new Error(feed.throwMessage || 'act broke')
         return feed.actReply || { ok: true }
       },

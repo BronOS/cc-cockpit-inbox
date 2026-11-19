@@ -46,7 +46,7 @@ pending the row says "Jev…" and moves at most once when the answer comes; with
 rule counts as not holding and is tried again later.
 
 The rules are global by default, the same in every project. A project can have its own set instead
-(groups, rules and agenda together), for example work projects with Jira and a rule for mail from
+(groups, rules, agenda and the item overlay setting together), for example work projects with Jira and a rule for mail from
 your lead, and personal ones without: see Settings below. Done, snooze and Jev's answers are shared
 by every project either way. The default list: read items go to Rest; Chat mentions and direct
 messages go to Now; then each source to its own group.
@@ -67,7 +67,9 @@ Both are kept app-wide on this machine and dropped 14 days after the item was la
 The gear in the panel's title bar opens the settings page: groups (add, rename, reorder, delete, with
 collapsed and badge), rules (reorder, enable, duplicate, delete, edit inline), **Test** (how many
 current items a rule would place, with examples; Jev rules use cached answers only), the sources
-(read-only: state and counts), and the agenda position. Changes are saved whole with Save, so a
+(read-only: state and counts), the agenda position, and **Close the item after Mark read or Done** (on by
+default: Mark read and Done in an item's overlay, the source's and Inbox's own, close it; Mark unread
+never does; a source that predates the setting closes on Done only). Changes are saved whole with Save, so a
 half-typed rule is never applied. A source is kept out with a rule (`source is X` to Rest) or in that
 plugin's own settings.
 

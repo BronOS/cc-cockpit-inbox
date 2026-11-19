@@ -1,5 +1,6 @@
 'use strict'
-// Inbox v2's settings (design-v2 "Rules" › "Format"): groups, rules and where the agenda goes. The
+// Inbox v2's settings (design-v2 "Rules" › "Format"): groups, rules, where the agenda goes and whether
+// an item's overlay closes after Mark read or Done (`closeOnAction`, below). The
 // global set lives in ctx.appStorage under one key, not in a manifest settings schema (the rules
 // editor is an html settings page); a project may override it whole in its ctx.storage (below,
 // "a project's own set"). Read through
@@ -16,6 +17,12 @@
 //   not there goes to Rest (the settings page moves a deleted group's rules there too).
 // - Rest (`rest`) is built in: always there, always last; it can be renamed and its collapsed and
 //   badge flags set like any group.
+//
+// - `closeOnAction` (on by default): Mark read and Done in an item's overlay close it. Inbox's own
+//   "Done (Inbox)" reads it here; the sources' buttons run in their own hosts, so Inbox hands it to the
+//   source with the open (`act(id, 'open', { closeOnAction })`, design-v2 "The feed contract") and the
+//   source carries it in the overlay's type data. Only `false` is off: a set stored before the field
+//   existed (or an import without it) reads as on.
 //
 // A save from the settings page goes through `checkSettings` first: where `readSettings` quietly
 // drops what does not fit (right for a stored value), a save is refused with the reason, so the
@@ -75,6 +82,7 @@ function defaults() {
       { id: 'jira', enabled: true, group: 'jira', when: [cond('sourceKind', 'is', 'issues')] },
     ],
     agenda: 'top',
+    closeOnAction: true,
   }
 }
 
@@ -165,11 +173,12 @@ function readSettings(raw) {
   const version = own(raw, 'version')
   if (version === undefined || version === 1) return { ...defaults(), agenda: agendaOfV1(raw) }
   const agenda = AGENDA.includes(own(raw, 'agenda')) ? own(raw, 'agenda') : 'top'
+  const closeOnAction = own(raw, 'closeOnAction') !== false
   const groups = own(raw, 'groups')
   const rules = own(raw, 'rules')
-  if (!Array.isArray(groups) || !Array.isArray(rules)) return { ...defaults(), agenda }
+  if (!Array.isArray(groups) || !Array.isArray(rules)) return { ...defaults(), agenda, closeOnAction }
   const g = groupsOf(groups)
-  return { version: VERSION, groups: g, rules: rulesOf(rules, new Set(g.map((x) => x.id))), agenda }
+  return { version: VERSION, groups: g, rules: rulesOf(rules, new Set(g.map((x) => x.id))), agenda, closeOnAction }
 }
 
 /** What a value of each kind of the field table must be, for a refusal's reason. */
@@ -223,6 +232,9 @@ function checkSettings(raw) {
   if (!isObj(raw)) return no('the settings are not an object')
   if (own(raw, 'version') !== VERSION) return no('these are not Inbox v2 settings (version 2)', 'version')
   if (!AGENDA.includes(own(raw, 'agenda'))) return no('the agenda must be top, bottom or off', 'agenda')
+  // Absent is on (a set exported before the field existed imports as it was).
+  const close = own(raw, 'closeOnAction')
+  if (close !== undefined && typeof close !== 'boolean') return no('closeOnAction must be true or false', 'closeOnAction')
   const groups = own(raw, 'groups')
   const rules = own(raw, 'rules')
   if (!Array.isArray(groups)) return no('the groups are not a list', 'groups')

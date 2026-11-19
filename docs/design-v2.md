@@ -64,9 +64,15 @@ Manifest of Inbox 0.2.0: `services: { uses: { "inbox-feed": 2, "jev": 1 }, colle
   without a major bump.
 - `snapshot()` → `Sync` (below): the source's full current list, from its cache, never an API call. Inbox calls it when
   it activates and whenever a provider joins (`ServiceSet.onChange`).
-- `act(id, action)` → `{ ok: true } | { ok: false, message }`: run one of the item's current actions. The source checks
+- `act(id, action, opts?)` → `{ ok: true } | { ok: false, message }`: run one of the item's current actions. The source checks
   that `id` is one of its items and `action` is in that item's `actions` (the caller is another plugin). It reflects
   the result with an `item` or `gone` event; Inbox does not change the item itself. `message` at most 300 characters.
+  `opts` (Inbox 0.2.7+, `open` only): `{ closeOnAction: boolean }`, the person's "Close the item after Mark read or
+  Done". The source keeps it in the overlay's type data (`inbox-item { source, id, closeOnAction }`), where its own
+  toolbar buttons read it, since they run in its host, not Inbox's: Mark read and Done return `{ close: true }` unless
+  it is `false`; Mark unread never closes. Untrusted like the rest: only `false` turns closing off, and a missing
+  `opts` (an older Inbox, or an open from the source's own panel) means on, the default. A source that ignores it keeps
+  its own behaviour; no version bump (an optional argument).
 
 ### Events (`ctx.services.emit('inbox-feed', event, data)`)
 
@@ -179,6 +185,7 @@ interface InboxSettings {
   groups: Group[]                // display order, at most 20; the built-in group `rest` is always last
   rules: Rule[]                  // evaluation order, at most 200
   agenda: 'top' | 'bottom' | 'off'
+  closeOnAction?: boolean        // item overlay: Mark read and Done close it; absent = true (0.2.7)
 }
 interface Group { id: string; name: string; collapsed?: boolean; badge?: boolean }   // name 1-40
 type Rule = {
@@ -298,7 +305,10 @@ the content is there (design-next §3.4). Buttons in the app's toolbar:
 
 - the **source** registers `ctx.overlay.buttons('inbox-item', ...)` and returns its item's current actions (not
   `open`) when `data.source` is its own id and `data.id` is one of its items; `run` calls the same code as `act`;
-- **Inbox** registers "Done (Inbox)" for every `inbox-item` it holds (its memory; `run` returns `{ close: true }`);
+- **Inbox** registers "Done (Inbox)" for every `inbox-item` it holds (its memory; `run` returns `{ close: true }` when
+  the set in force has `closeOnAction` on, read at click time, never from the overlay's data);
+- the source's Mark read and Done close the overlay unless its data says `closeOnAction: false` (Inbox passed the
+  setting with the open, see `act`); Mark unread never closes (a "look again later" action);
 - core's **Discuss with Claude** (the source's `onDiscuss` supplies the item text).
 
 ## Settings page (12)
@@ -313,6 +323,7 @@ inside the app's central Settings, with the component stylesheet:
 - **Sources**: read-only list: label, scope, state, item count; a note that a source is kept out with a rule
   (`source is X` → Rest) or in that plugin's own settings.
 - **Agenda**: top, bottom, off.
+- **Item overlay**: "Close the item after Mark read or Done" (on by default), part of the set like the agenda.
 
 Opened under Settings > Plugins (scope `app`) the page edits the global set. Opened under This Project (scope
 `project`) it starts with a **Use the global rules** switch (a checkbox with `role="switch"`: the component stylesheet

@@ -175,6 +175,12 @@ test('what the page says: summaries, notes, test results, source rows, dirty', (
   assert.equal(L.isDirty(L.setAgenda(d, 'off'), d), true)
   assert.equal(L.isDirty({ a: 1, b: { x: 1, y: 2 } }, { b: { y: 2, x: 1 }, a: 1 }), false)
   assert.equal(L.setAgenda(d, 'beside'), d)
+  const off = L.setCloseOnAction(d, false)
+  assert.equal(off.closeOnAction, false)
+  assert.equal(d.closeOnAction, true, 'the input draft is not changed')
+  assert.equal(L.isDirty(off, d), true)
+  assert.equal(L.isDirty(L.setCloseOnAction(off, true), d), false)
+  assert.equal(L.CLOSE_TEXT.label, 'Close the item after Mark read or Done')
 })
 
 // ---- lib/settings.js: the strict check of a save ----

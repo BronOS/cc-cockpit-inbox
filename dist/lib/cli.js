@@ -32,7 +32,7 @@ Rules and groups. Without a flag a command works on the set in effect in this wi
 set when it has one, else the global rules. --global works on the global set; --project on this project's
 own set, and is refused when the project has none (it gets one only in Settings › This Project).
 
-  ccc inbox rules [--global|--project]          the set: groups (n, name, id, flags), numbered rules (on/off, what each checks → group, id), agenda
+  ccc inbox rules [--global|--project]          the set: groups (n, name, id, flags), numbered rules (on/off, what each checks → group, id), agenda, overlay close
   ccc inbox rules export                        the whole set as JSON on stdout
   ccc inbox rules import -                      replace the whole set with JSON read from stdin
   ccc inbox rules add <json|-> [--at <n>]       add one rule; default place: after the leading rules that go to Rest, before the first that goes elsewhere

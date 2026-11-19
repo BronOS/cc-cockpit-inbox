@@ -716,7 +716,11 @@ function createInbox(ctx, opts = {}) {
     // the Done view or a search) stays done.
     // Decided before the act but applied after a successful one, so a failed or timed-out open keeps the mark.
     const endsMark = action === 'open' && !state.status(it, now()).hidden
-    const reply = actReplyOf(await call(handle.act(it.id, action), `${label} ${action}`))
+    // An open carries the person's "Close the item after Mark read or Done" (settings.js `closeOnAction`):
+    // the source's toolbar buttons run in its own host, so the source keeps it in the overlay's type data.
+    // A source that predates it ignores the third argument and keeps closing on Done only.
+    const opts = action === 'open' ? [{ closeOnAction: settings.closeOnAction }] : []
+    const reply = actReplyOf(await call(handle.act(it.id, action, ...opts), `${label} ${action}`))
     if (endsMark && reply.ok) await state.restore(it.source, it.id)
     if (action === 'open') schedulePublish()
     return { ...reply, label: a.label }
@@ -800,14 +804,16 @@ function createInbox(ctx, opts = {}) {
   }
 
   // "Done (Inbox)" in the toolbar of every `inbox-item` overlay of an item Inbox holds and shows. The
-  // overlay's data came from its opener: only a key Inbox has itself gets the button.
+  // overlay's data came from its opener: only a key Inbox has itself gets the button. It closes the
+  // overlay when the person's `closeOnAction` is on, read at click time from the set in force (never
+  // from the overlay's data, which the opener wrote).
   disposers.push(
     ctx.overlay.buttons(ITEM_TYPE, (info) => {
       const d = info && info.type && info.type.data
       if (!isObj(d) || typeof d.source !== 'string' || typeof d.id !== 'string') return []
       const key = keyOf(d.source, d.id)
       if (!visibleByKey(key)) return []
-      return [{ id: DONE_BUTTON, label: 'Done (Inbox)', run: async () => ((await markDone(key)) ? { close: true } : undefined) }]
+      return [{ id: DONE_BUTTON, label: 'Done (Inbox)', run: async () => ((await markDone(key)) && settings.closeOnAction ? { close: true } : undefined) }]
     })
   )
   disposers.push(ctx.schedule(REFRESH_S, () => tick()))

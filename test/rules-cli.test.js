@@ -60,6 +60,7 @@ test('rules: the global set with its groups, numbered rules and agenda, named as
     '  6. on: sourceKind is issues → Jira [id jira]',
     '',
     'Agenda: top',
+    'Close the item after Mark read or Done: on',
     '',
   ])
   assert.equal((await ctx.runCli(['rules', 'list'])).stdout, r.stdout)
