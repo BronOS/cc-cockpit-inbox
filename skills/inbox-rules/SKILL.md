@@ -21,7 +21,7 @@ Inbox settings page and applies at once.
    `add` would put it, or `--at <n>`) or `ccc inbox rules test <n>` (an existing rule). It lists the
    current items of this window it would place; nothing is stored.
 4. Prefer small edits (`rules add`, `set`, `move`, `enable`, `disable`, `rm`, `groups add` ...) over
-   `rules import`: an import replaces the whole set, groups and agenda included.
+   `rules import`: an import replaces the whole set, groups, agenda and `closeOnAction` included.
 5. Tell the person what you changed, in words, and which set (global or this project's).
 
 Order matters: an earlier rule wins. A rule like "mail from my lead → Now" must stand above the
@@ -45,7 +45,7 @@ This Project, by turning off "Use the global rules"); the commands never create 
 ## Commands
 
 ```
-ccc inbox rules [--global|--project]          groups, numbered rules, agenda
+ccc inbox rules [--global|--project]          groups, numbered rules, agenda, overlay close
 ccc inbox rules export                        the whole set as JSON
 ccc inbox rules import -                      replace the whole set with JSON from stdin
 ccc inbox rules add <json|-> [--at <n>]       add one rule
@@ -97,6 +97,9 @@ Every command takes `--global` or `--project`. Numbers are the positions `ccc in
 ```
 
 - `version`: 2. `agenda`: `top`, `bottom` or `off` (where the Calendar agenda sits in the panel).
+- `closeOnAction` (optional, `true` or `false`; absent is `true`): "Close the item after Mark read or
+  Done", whether those buttons in an item's overlay close it. Keep what `export` gave you; change it only
+  when the person asks (the settings page has the switch).
 - **Groups**: at most 20 groups, Rest included. `id`: a letter or digit, then letters, digits, `_` or `-`, at
   most 40 characters, unique. `name`: 1 to 40 characters. `collapsed`: starts closed. `badge`: its
   unread items count toward the panel's badge. **Rest** (id `rest`) is built in: always there and

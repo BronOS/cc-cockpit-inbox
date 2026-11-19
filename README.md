@@ -104,7 +104,7 @@ The rules and groups can be read and edited from the CLI too, so a Claude tab ca
 page does ("put mail from my lead in Now"):
 
 ```
-ccc inbox rules                            the set: groups (n, name, id), numbered rules (on/off, what each checks → group), agenda
+ccc inbox rules                            the set: groups (n, name, id), numbered rules (on/off, what each checks → group), agenda, overlay close
 ccc inbox rules export | import            the whole set as JSON on stdout | replace it with JSON from stdin
 ccc inbox rules add <json|-> [--at <n>]    add one rule
 ccc inbox rules set <n> <json|->           replace rule n (its id and on/off kept when the JSON has none)
